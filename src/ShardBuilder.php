@@ -8,9 +8,13 @@ use Illuminate\Pagination\Paginator;
 
 /**
  * Eloquent builder that queries across multiple shard connections.
+ *
+ * @method ShardBuilder withoutReplicas()
  */
 class ShardBuilder extends EloquentBuilder
 {
+    protected bool $singleConnection = false;
+
     /**
      * @return array<string, array{weight:int}>
      */
@@ -22,14 +26,15 @@ class ShardBuilder extends EloquentBuilder
     /**
      * Create a replica builder for the specified connection.
      */
-    protected function replicateForConnection(string $connection): EloquentBuilder
+    protected function replicateForConnection(string $connection): self
     {
         $model = $this->getModel()->newInstance([], true)->setConnection($connection);
         $query = clone $this->getQuery();
         $query->connection = $model->getConnection();
-        $builder = new EloquentBuilder($query);
+        $builder = new self($query);
         $builder->setModel($model);
-        $builder->where($builder->qualifyColumn('is_replica'), false);
+        $builder->singleConnection = true;
+        $builder->withoutReplicas();
         $builder->setEagerLoads($this->getEagerLoads());
 
         return $builder;
@@ -40,6 +45,10 @@ class ShardBuilder extends EloquentBuilder
      */
     public function get($columns = ['*'])
     {
+        if ($this->singleConnection) {
+            return parent::get($columns);
+        }
+
         $limit = $this->getQuery()->limit;
         $offset = $this->getQuery()->offset;
 
@@ -151,6 +160,10 @@ class ShardBuilder extends EloquentBuilder
      */
     public function chunk($count, callable $callback)
     {
+        if ($this->singleConnection) {
+            return parent::chunk($count, $callback);
+        }
+
         foreach ($this->connections() as $name => $config) {
             $builder = $this->replicateForConnection($name);
             $builder->chunk($count, $callback);
@@ -164,6 +177,10 @@ class ShardBuilder extends EloquentBuilder
      */
     public function chunkById($count, callable $callback, $column = null, $alias = null)
     {
+        if ($this->singleConnection) {
+            return parent::chunkById($count, $callback, $column, $alias);
+        }
+
         foreach ($this->connections() as $name => $config) {
             $builder = $this->replicateForConnection($name);
             $builder->chunkById($count, $callback, $column, $alias);
@@ -177,6 +194,10 @@ class ShardBuilder extends EloquentBuilder
      */
     public function paginate($perPage = null, $columns = ['*'], $pageName = 'page', $page = null, $total = null)
     {
+        if ($this->singleConnection) {
+            return parent::paginate($perPage, $columns, $pageName, $page, $total);
+        }
+
         $page = $page ?: Paginator::resolveCurrentPage($pageName);
         $perPage = $perPage ?: $this->getModel()->getPerPage();
 
@@ -284,8 +305,8 @@ class ShardBuilder extends EloquentBuilder
     /**
      * Compare two models based on the builder's order clauses.
      *
-     * @param  \Illuminate\Database\Eloquent\Model  $a
-     * @param  \Illuminate\Database\Eloquent\Model  $b
+     * @param \Illuminate\Database\Eloquent\Model $a
+     * @param \Illuminate\Database\Eloquent\Model $b
      */
     protected function compareModels($a, $b): int
     {

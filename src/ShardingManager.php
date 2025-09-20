@@ -16,7 +16,7 @@ class ShardingManager
     /**
      * Create a new sharding manager instance.
      *
-     * @param  array<string, mixed>|null  $config
+     * @param array<string, mixed>|null $config
      * @return void
      */
     public function __construct(?array $config = null)
@@ -27,7 +27,7 @@ class ShardingManager
     /**
      * Get configured connections for the given model or table.
      *
-     * @param  Model|string  $model
+     * @param Model|string $model
      * @return array<string, mixed>
      */
     public function connectionsFor(Model|string $model): array
@@ -45,8 +45,8 @@ class ShardingManager
     /**
      * Determine connection names for given model and key.
      *
-     * @param  Model|string  $model
-     * @param  mixed  $key
+     * @param Model|string $model
+     * @param mixed $key
      * @return array<int, string>
      */
     public function connectionFor(Model|string $model, mixed $key): array
@@ -70,7 +70,7 @@ class ShardingManager
     /**
      * Resolve strategy instance and configuration for model or table.
      *
-     * @param  Model|string  $model
+     * @param Model|string $model
      * @return array{0: Strategy, 1: array<string, mixed>}
      */
     public function strategyFor(Model|string $model): array
@@ -97,7 +97,7 @@ class ShardingManager
     /**
      * Get the group name for the given model or table.
      *
-     * @param  Model|string  $model
+     * @param Model|string $model
      * @return string|null
      */
     public function groupFor(Model|string $model): ?string
@@ -115,7 +115,7 @@ class ShardingManager
     /**
      * Resolve actual table name from group configuration.
      *
-     * @param  string  $table
+     * @param string $table
      * @return string
      */
     protected function resolveTable(string $table): string

@@ -17,8 +17,8 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
     /**
      * Determine shard connections for a key using hash slots stored in the database.
      *
-     * @param  mixed  $key
-     * @param  array  $config
+     * @param mixed $key
+     * @param array $config
      * @return array<int, string>
      */
     public function determine(mixed $key, array $config): array
@@ -160,9 +160,9 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
     /**
      * Handle updates after a record is moved.
      *
-     * @param  int|string  $id
-     * @param  string  $connection
-     * @param  array  $config
+     * @param int|string $id
+     * @param string $connection
+     * @param array $config
      * @return void
      */
     public function rowMoved(int|string $id, string $connection, array $config): void
@@ -226,9 +226,9 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
     /**
      * Build replica connection list.
      *
-     * @param  array<int, string>  $connections
-     * @param  int  $index
-     * @param  int  $replicaCount
+     * @param array<int, string> $connections
+     * @param int $index
+     * @param int $replicaCount
      * @return array<int, string>
      */
     private function buildReplicas(array $connections, int $index, int $replicaCount): array

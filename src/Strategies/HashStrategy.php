@@ -12,8 +12,8 @@ class HashStrategy implements Strategy
     /**
      * Determine shard connections for the given key.
      *
-     * @param  mixed  $key
-     * @param  array  $config
+     * @param mixed $key
+     * @param array $config
      * @return array<int, string>
      */
     public function determine(mixed $key, array $config): array

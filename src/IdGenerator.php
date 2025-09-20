@@ -19,7 +19,7 @@ class IdGenerator
     /**
      * Create a new generator instance.
      *
-     * @param  array<string, mixed>|null  $config
+     * @param array<string, mixed>|null $config
      * @return void
      */
     public function __construct(?array $config = null)
@@ -30,7 +30,7 @@ class IdGenerator
     /**
      * Generate an ID for the given model.
      *
-     * @param  Model|string  $model
+     * @param Model|string $model
      * @return int
      */
     public function generate(Model|string $model): int

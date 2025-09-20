@@ -16,8 +16,8 @@ class DbRangeStrategy implements Strategy, SupportsAfterRebalance
     /**
      * Determine shard connections for a key using database ranges.
      *
-     * @param  mixed  $key
-     * @param  array  $config
+     * @param mixed $key
+     * @param array $config
      * @return array<int, string>
      */
     public function determine(mixed $key, array $config): array
@@ -161,13 +161,13 @@ class DbRangeStrategy implements Strategy, SupportsAfterRebalance
     /**
      * Persist new range information after rebalancing.
      *
-     * @param  string       $table
-     * @param  string       $key
-     * @param  string|null  $from
-     * @param  string|null  $to
-     * @param  int|null     $start
-     * @param  int|null     $end
-     * @param  array        $config
+     * @param string $table
+     * @param string $key
+     * @param string|null $from
+     * @param string|null $to
+     * @param int|null $start
+     * @param int|null $end
+     * @param array $config
      * @return void
      */
     public function afterRebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): void
@@ -200,9 +200,9 @@ class DbRangeStrategy implements Strategy, SupportsAfterRebalance
     /**
      * Build replica connection list.
      *
-     * @param  array<int, string>  $connections
-     * @param  int  $index
-     * @param  int  $replicaCount
+     * @param array<int, string> $connections
+     * @param int $index
+     * @param int $replicaCount
      * @return array<int, string>
      */
     private function buildReplicas(array $connections, int $index, int $replicaCount): array

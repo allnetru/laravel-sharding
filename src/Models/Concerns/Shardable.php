@@ -20,6 +20,9 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 
+/**
+ * @method static Builder withoutReplicas()
+ */
 trait Shardable
 {
     /**
@@ -28,7 +31,7 @@ trait Shardable
     public array $replicaConnections = [];
 
     /**
-     * @param  Builder  $q
+     * @param Builder $q
      * @return Builder
      *
      * @throws InvalidArgumentException
@@ -94,10 +97,10 @@ trait Shardable
     /**
      * Define an inverse one-to-one or many relation that resolves the parent's shard.
      *
-     * @param  class-string<Model>  $related
-     * @param  string|null  $foreignKey
-     * @param  string|null  $ownerKey
-     * @param  string|null  $relation
+     * @param class-string<Model> $related
+     * @param string|null $foreignKey
+     * @param string|null $ownerKey
+     * @param string|null $relation
      * @return \Illuminate\Database\Eloquent\Relations\BelongsTo<Model, $this>
      * @phpstan-return ShardBelongsTo<Model, $this>
      */
@@ -235,7 +238,7 @@ trait Shardable
     /**
      * Create a new Eloquent query builder for the model.
      *
-     * @param  \Illuminate\Database\Query\Builder  $query
+     * @param \Illuminate\Database\Query\Builder $query
      * @return Builder
      */
     public function newEloquentBuilder($query): Builder

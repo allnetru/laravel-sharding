@@ -14,8 +14,8 @@ class RangeStrategy implements Strategy, SupportsAfterRebalance
     /**
      * Determine shard connections for a key based on configured ranges.
      *
-     * @param  mixed  $key
-     * @param  array  $config
+     * @param mixed $key
+     * @param array $config
      * @return array<int, string>
      */
     public function determine(mixed $key, array $config): array
@@ -70,13 +70,13 @@ class RangeStrategy implements Strategy, SupportsAfterRebalance
     /**
      * Update configuration ranges after rebalancing.
      *
-     * @param  string       $table
-     * @param  string       $key
-     * @param  string|null  $from
-     * @param  string|null  $to
-     * @param  int|null     $start
-     * @param  int|null     $end
-     * @param  array        $config
+     * @param string $table
+     * @param string $key
+     * @param string|null $from
+     * @param string|null $to
+     * @param int|null $start
+     * @param int|null $end
+     * @param array $config
      * @return void
      */
     public function afterRebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): void
