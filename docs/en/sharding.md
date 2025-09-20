@@ -20,6 +20,43 @@ DB_SHARD_MIGRATIONS="shard-1;shard-2"
 
 Shards listed here are skipped for new writes until data is moved.
 
+### Database configuration
+
+Merge the generated shard connections into `config/database.php` so Laravel can resolve them just like first-party connections:
+
+```php
+use Allnetru\Sharding\Support\Config\Shards;
+use Illuminate\Support\Str;
+
+return [
+    'default' => env('DB_CONNECTION', 'mysql'),
+
+    'connections' => array_merge([
+        'mysql' => [
+            'driver' => 'mysql',
+            'host' => env('DB_HOST', '127.0.0.1'),
+            'database' => env('DB_DATABASE', 'forge'),
+            // ... keep your existing base connections here
+        ],
+        // other non-sharded connections...
+    ], Shards::databaseConnections()),
+
+    'migrations' => [
+        'table' => 'migrations',
+        'update_date_on_publish' => true,
+    ],
+
+    'redis' => [
+        'client' => env('REDIS_CLIENT', 'phpredis'),
+        'options' => [
+            'cluster' => env('REDIS_CLUSTER', 'redis'),
+            'prefix' => env('REDIS_PREFIX', Str::slug(env('APP_NAME', 'laravel'), '_') . '_database_'),
+        ],
+        // ... include your Redis connections as usual
+    ],
+];
+```
+
 ### Creating a sharded table
 
 1. Create a migration with an unsigned BIGINT primary key and an `is_replica` boolean column:
