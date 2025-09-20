@@ -25,8 +25,11 @@
     },
     "require-dev": {
         "friendsofphp/php-cs-fixer": "^3.87",
+        "larastan/larastan": "^3.0",
         "orchestra/testbench": "^10.0",
+        "phpstan/extension-installer": "^1.3.1",
         "phpstan/phpstan": "^2.1",
+        "phpstan/phpstan-deprecation-rules": "^2.0",
         "phpunit/phpunit": "^10.5|^11.0"
     },
     "autoload": {
@@ -47,10 +50,16 @@
         }
     },
     "scripts": {
-        "test": "vendor/bin/phpunit"
+        "test": "vendor/bin/phpunit",
+        "analyse": "vendor/bin/phpstan analyse",
+        "test-coverage": "vendor/bin/phpunit --coverage-text",
+        "baseline": "vendor/bin/phpstan --generate-baseline"
     },
     "config": {
-        "sort-packages": true
+        "sort-packages": true,
+        "allow-plugins": {
+            "phpstan/extension-installer": true
+        }
     },
     "minimum-stability": "dev",
     "prefer-stable": true

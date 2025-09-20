@@ -1,0 +1,43 @@
+parameters:
+	ignoreErrors:
+		-
+			message: '#^Access to an undefined property Allnetru\\Sharding\\Models\\ShardSequence\:\:\$last_id\.$#'
+			identifier: property.notFound
+			count: 4
+			path: src/IdGenerators/TableSequenceStrategy.php
+
+		-
+			message: '#^Property Illuminate\\Database\\Eloquent\\Relations\\Relation\<TRelatedModel of Illuminate\\Database\\Eloquent\\Model,TDeclaringModel of Illuminate\\Database\\Eloquent\\Model,\(TRelatedModel of Illuminate\\Database\\Eloquent\\Model\)\|null\>\:\:\$query \(Illuminate\\Database\\Eloquent\\Builder\<TRelatedModel of Illuminate\\Database\\Eloquent\\Model\>\) does not accept Illuminate\\Database\\Eloquent\\Builder\<Illuminate\\Database\\Eloquent\\Model\>\.$#'
+			identifier: assign.propertyType
+			count: 1
+			path: src/Relations/ShardMorphTo.php
+
+		-
+			message: '#^Access to an undefined property Allnetru\\Sharding\\Models\\ShardSlot\:\:\$replicas\.$#'
+			identifier: property.notFound
+			count: 3
+			path: src/Strategies/DbHashRangeStrategy.php
+
+		-
+			message: '#^Access to protected property Allnetru\\Sharding\\Models\\ShardSlot\:\:\$connection\.$#'
+			identifier: property.protected
+			count: 4
+			path: src/Strategies/DbHashRangeStrategy.php
+
+		-
+			message: '#^Access to an undefined property Allnetru\\Sharding\\Models\\ShardRange\:\:\$replicas\.$#'
+			identifier: property.notFound
+			count: 2
+			path: src/Strategies/DbRangeStrategy.php
+
+		-
+			message: '#^Access to protected property Allnetru\\Sharding\\Models\\ShardRange\:\:\$connection\.$#'
+			identifier: property.protected
+			count: 2
+			path: src/Strategies/DbRangeStrategy.php
+
+		-
+			message: '#^Called ''env'' outside of the config directory which returns null when the config is cached, use ''config''\.$#'
+			identifier: larastan.noEnvCallsOutsideOfConfig
+			count: 10
+			path: src/Support/Config/Shards.php
