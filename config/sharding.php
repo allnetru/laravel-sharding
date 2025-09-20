@@ -20,11 +20,11 @@ return [
     | may extend the package by adding your own strategy implementation here.
     */
     'strategies' => [
-        'hash' => \Allnetru\Sharding\Strategies\HashStrategy::class,
-        'redis' => \Allnetru\Sharding\Strategies\RedisStrategy::class,
-        'range' => \Allnetru\Sharding\Strategies\RangeStrategy::class,
-        'db_range' => \Allnetru\Sharding\Strategies\DbRangeStrategy::class,
-        'db_hash_range' => \Allnetru\Sharding\Strategies\DbHashRangeStrategy::class,
+        'hash' => Allnetru\Sharding\Strategies\HashStrategy::class,
+        'redis' => Allnetru\Sharding\Strategies\RedisStrategy::class,
+        'range' => Allnetru\Sharding\Strategies\RangeStrategy::class,
+        'db_range' => Allnetru\Sharding\Strategies\DbRangeStrategy::class,
+        'db_hash_range' => Allnetru\Sharding\Strategies\DbHashRangeStrategy::class,
     ],
 
     /*
@@ -40,8 +40,8 @@ return [
     'id_generator' => [
         'default' => 'snowflake',
         'strategies' => [
-            'snowflake' => \Allnetru\Sharding\IdGenerators\SnowflakeStrategy::class,
-            'sequence' => \Allnetru\Sharding\IdGenerators\TableSequenceStrategy::class,
+            'snowflake' => Allnetru\Sharding\IdGenerators\SnowflakeStrategy::class,
+            'sequence' => Allnetru\Sharding\IdGenerators\TableSequenceStrategy::class,
         ],
         'sequence_table' => 'shard_sequences',
         // 'meta_connection' => 'mysql',
@@ -57,8 +57,8 @@ return [
     | shard names via the DB_SHARDS variable. You may also temporarily exclude
     | shards from selection by listing them in DB_SHARD_MIGRATIONS.
     */
-    'connections' => \Allnetru\Sharding\Support\Config\Shards::weights(),
-    'migrations' => \Allnetru\Sharding\Support\Config\Shards::migrations(),
+    'connections' => Allnetru\Sharding\Support\Config\Shards::weights(),
+    'migrations' => Allnetru\Sharding\Support\Config\Shards::migrations(),
 
     /*
     |--------------------------------------------------------------------------
