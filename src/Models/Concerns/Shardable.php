@@ -49,7 +49,8 @@ trait Shardable
     public static function bootShardable(): void
     {
         static::addGlobalScope('without_replicas', function (Builder $builder): void {
-            $builder->where($builder->qualifyColumn('is_replica'), false);
+            /** @var Builder<static>&ShardBuilder $builder */
+            $builder->withoutReplicas();
         });
 
         static::creating(function ($model): void {
