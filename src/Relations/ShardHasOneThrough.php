@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Relations\HasOneThrough;
  * @template TRelatedModel of \Illuminate\Database\Eloquent\Model
  * @template TIntermediateModel of \Illuminate\Database\Eloquent\Model
  * @template TDeclaringModel of \Illuminate\Database\Eloquent\Model
+ * @method mixed|null getParentKey()
  *
  * @extends HasOneThrough<TRelatedModel, TIntermediateModel, TDeclaringModel>
  */
@@ -25,15 +26,5 @@ class ShardHasOneThrough extends HasOneThrough
             $this->switchConnection($parentKey);
         }
         parent::addConstraints();
-    }
-
-    /**
-     * Get the far parent key value for the relationship.
-     *
-     * @return mixed
-     */
-    public function getParentKey()
-    {
-        return $this->farParent->{$this->localKey} ?? null;
     }
 }
