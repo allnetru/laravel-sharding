@@ -8,7 +8,7 @@ namespace Allnetru\Sharding\IdGenerators;
 class SnowflakeStrategy implements Strategy
 {
     /**
-     * {@inheritdoc}
+     * @inheritdoc
      */
     public function generate(array $config): int
     {

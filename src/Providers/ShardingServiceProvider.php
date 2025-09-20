@@ -20,7 +20,7 @@ class ShardingServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        $this->mergeConfigFrom(__DIR__.'/../../config/sharding.php', 'sharding');
+        $this->mergeConfigFrom(__DIR__ . '/../../config/sharding.php', 'sharding');
 
         $this->app->singleton(ShardingManager::class, function () {
             return new ShardingManager(config('sharding'));
@@ -38,11 +38,11 @@ class ShardingServiceProvider extends ServiceProvider
     {
         if ($this->app->runningInConsole()) {
             $this->publishes([
-                __DIR__.'/../../config/sharding.php' => config_path('sharding.php'),
+                __DIR__ . '/../../config/sharding.php' => config_path('sharding.php'),
             ], 'laravel-sharding-config');
 
             $this->publishes([
-                __DIR__.'/../../database/migrations/' => database_path('migrations'),
+                __DIR__ . '/../../database/migrations/' => database_path('migrations'),
             ], 'laravel-sharding-migrations');
 
             $this->commands([
@@ -53,6 +53,6 @@ class ShardingServiceProvider extends ServiceProvider
             ]);
         }
 
-        $this->loadMigrationsFrom(__DIR__.'/../../database/migrations');
+        $this->loadMigrationsFrom(__DIR__ . '/../../database/migrations');
     }
 }

@@ -15,7 +15,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class ShardBelongsTo extends BelongsTo
 {
-    /** {@inheritDoc} */
+    /** @inheritDoc */
     public function addConstraints()
     {
         if (static::$constraints) {

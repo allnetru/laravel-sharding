@@ -15,7 +15,7 @@ class ShardHasMany extends HasMany
 {
     use ResolvesShard;
 
-    /** {@inheritDoc} */
+    /** @inheritDoc */
     public function addConstraints()
     {
         if (static::$constraints) {

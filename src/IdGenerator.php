@@ -40,7 +40,7 @@ class IdGenerator
         $strategyName = $tableConfig['id_generator'] ?? $idConfig['default'] ?? null;
         $strategyClass = $idConfig['strategies'][$strategyName] ?? null;
 
-        if (! $strategyClass) {
+        if (!$strategyClass) {
             throw new RuntimeException("ID generator strategy [$strategyName] not configured.");
         }
 

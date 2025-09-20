@@ -16,7 +16,7 @@ class ShardHasManyThrough extends HasManyThrough
 {
     use ResolvesShard;
 
-    /** {@inheritDoc} */
+    /** @inheritDoc */
     public function addConstraints()
     {
         $this->switchConnection($this->getParentKey());

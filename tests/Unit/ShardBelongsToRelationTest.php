@@ -34,8 +34,7 @@ class ShardBelongsToRelationTest extends TestCase
         ]);
 
         app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
-        app()->singleton(IdGenerator::class, fn () => new class
-        {
+        app()->singleton(IdGenerator::class, fn () => new class {
             private int $id = 0;
 
             public function generate($model): int

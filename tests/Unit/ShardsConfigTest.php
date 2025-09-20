@@ -12,7 +12,7 @@ class ShardsConfigTest extends TestCase
     #[DataProvider('invalidDsnProvider')]
     public function test_invalid_dsn_is_excluded(string $dsn): void
     {
-        putenv('DB_SHARDS='.$dsn);
+        putenv('DB_SHARDS=' . $dsn);
         $_ENV['DB_SHARDS'] = $dsn;
         $_SERVER['DB_SHARDS'] = $dsn;
         Log::shouldReceive('warning')->twice()->with(sprintf('Invalid shard DSN: %s', $dsn));

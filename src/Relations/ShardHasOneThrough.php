@@ -16,7 +16,7 @@ class ShardHasOneThrough extends HasOneThrough
 {
     use ResolvesShard;
 
-    /** {@inheritDoc} */
+    /** @inheritDoc */
     public function addConstraints()
     {
         $this->switchConnection($this->getParentKey());

@@ -13,7 +13,7 @@ use Illuminate\Database\Eloquent\Relations\MorphTo;
  */
 class ShardMorphTo extends MorphTo
 {
-    /** {@inheritDoc} */
+    /** @inheritDoc */
     public function addConstraints()
     {
         if (static::$constraints) {

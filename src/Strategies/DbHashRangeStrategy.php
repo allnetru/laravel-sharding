@@ -29,7 +29,7 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
         $slotTable = $config['slot_table'] ?? 'shard_slots';
         $scope = $config['group'] ?? $config['table'] ?? null;
 
-        if (! $scope) {
+        if (!$scope) {
             throw new InvalidArgumentException('No table scope provided for sharding.');
         }
 
@@ -42,7 +42,7 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
             $slot->setTable($slotTable);
             $primary = $slot->connection;
             $replicas = $slot->replicas ?? [];
-            if (! $replicas && ($config['replica_count'] ?? 0) > 0) {
+            if (!$replicas && ($config['replica_count'] ?? 0) > 0) {
                 $connections = array_keys($config['connections'] ?? []);
                 sort($connections);
                 $index = array_search($primary, $connections, true);
@@ -62,7 +62,7 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
     }
 
     /**
-     * {@inheritdoc}
+     * @inheritdoc
      */
     public function recordMeta(mixed $key, array $connections, array $config): void
     {
@@ -73,7 +73,7 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
         $slotTable = $config['slot_table'] ?? 'shard_slots';
         $scope = $config['group'] ?? $config['table'] ?? null;
 
-        if (! $scope) {
+        if (!$scope) {
             throw new InvalidArgumentException('No table scope provided for sharding.');
         }
 
@@ -105,7 +105,7 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
     }
 
     /**
-     * {@inheritdoc}
+     * @inheritdoc
      */
     public function recordReplica(mixed $key, string $connection, array $config): void
     {
@@ -116,7 +116,7 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
         $slotTable = $config['slot_table'] ?? 'shard_slots';
         $scope = $config['group'] ?? $config['table'] ?? null;
 
-        if (! $scope) {
+        if (!$scope) {
             throw new InvalidArgumentException('No table scope provided for sharding.');
         }
 
@@ -126,7 +126,7 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
             if ($slot) {
                 $slot->setTable($slotTable);
                 $replicas = $slot->replicas ?? [];
-                if (! in_array($connection, $replicas, true)) {
+                if (!in_array($connection, $replicas, true)) {
                     $replicas[] = $connection;
                     $slot->replicas = $replicas;
                     $slot->save();
@@ -148,7 +148,7 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
     }
 
     /**
-     * {@inheritdoc}
+     * @inheritdoc
      */
     public function canRebalance(): bool
     {

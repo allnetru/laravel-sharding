@@ -42,7 +42,7 @@ class RangeStrategy implements Strategy
     }
 
     /**
-     * {@inheritdoc}
+     * @inheritdoc
      */
     public function recordMeta(mixed $key, array $connections, array $config): void
     {
@@ -50,7 +50,7 @@ class RangeStrategy implements Strategy
     }
 
     /**
-     * {@inheritdoc}
+     * @inheritdoc
      */
     public function recordReplica(mixed $key, string $connection, array $config): void
     {
@@ -58,7 +58,7 @@ class RangeStrategy implements Strategy
     }
 
     /**
-     * {@inheritdoc}
+     * @inheritdoc
      */
     public function canRebalance(): bool
     {
@@ -70,7 +70,7 @@ class RangeStrategy implements Strategy
      */
     protected function afterRebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): void
     {
-        if (! $to) {
+        if (!$to) {
             return;
         }
 

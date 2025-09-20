@@ -16,7 +16,7 @@ class ShardBelongsToMany extends BelongsToMany
 {
     use ResolvesShard;
 
-    /** {@inheritDoc} */
+    /** @inheritDoc */
     public function addConstraints()
     {
         $this->switchConnection($this->parent->{$this->parentKey});

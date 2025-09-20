@@ -15,7 +15,7 @@ class ShardMorphOne extends MorphOne
 {
     use ResolvesShard;
 
-    /** {@inheritDoc} */
+    /** @inheritDoc */
     public function addConstraints()
     {
         if (static::$constraints) {

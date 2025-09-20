@@ -15,7 +15,7 @@ class ShardMorphMany extends MorphMany
 {
     use ResolvesShard;
 
-    /** {@inheritDoc} */
+    /** @inheritDoc */
     public function addConstraints()
     {
         if (static::$constraints) {

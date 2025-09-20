@@ -77,7 +77,7 @@ class ShardingManager
         $strategyName = $tableConfig['strategy'] ?? $this->config['default'] ?? null;
         $strategyClass = $this->config['strategies'][$strategyName] ?? null;
 
-        if (! $strategyClass) {
+        if (!$strategyClass) {
             throw new RuntimeException("Sharding strategy [$strategyName] not configured.");
         }
 

@@ -15,7 +15,7 @@ class ShardHasOne extends HasOne
 {
     use ResolvesShard;
 
-    /** {@inheritDoc} */
+    /** @inheritDoc */
     public function addConstraints()
     {
         if (static::$constraints) {

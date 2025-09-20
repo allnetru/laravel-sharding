@@ -36,7 +36,7 @@ class ShardBuilder extends EloquentBuilder
     }
 
     /**
-     * {@inheritdoc}
+     * @inheritdoc
      */
     public function get($columns = ['*'])
     {
@@ -67,17 +67,17 @@ class ShardBuilder extends EloquentBuilder
             foreach ($batches as $name => $items) {
                 $index = $indexes[$name];
 
-                if (! isset($items[$index])) {
+                if (!isset($items[$index])) {
                     continue;
                 }
 
-                if (! $candidate || $this->compareModels($items[$index], $candidate) < 0) {
+                if (!$candidate || $this->compareModels($items[$index], $candidate) < 0) {
                     $candidate = $items[$index];
                     $candidateKey = $name;
                 }
             }
 
-            if (! $candidate) {
+            if (!$candidate) {
                 break;
             }
 
@@ -112,12 +112,12 @@ class ShardBuilder extends EloquentBuilder
         $skip = max(0, $offset ?? 0);
         $items = [];
 
-        while (! empty($current)) {
+        while (!empty($current)) {
             $candidate = null;
             $candidateKey = null;
 
             foreach ($current as $name => $model) {
-                if (! $candidate || $this->compareModels($model, $candidate) < 0) {
+                if (!$candidate || $this->compareModels($model, $candidate) < 0) {
                     $candidate = $model;
                     $candidateKey = $name;
                 }
@@ -146,7 +146,7 @@ class ShardBuilder extends EloquentBuilder
     }
 
     /**
-     * {@inheritdoc}
+     * @inheritdoc
      */
     public function chunk($count, callable $callback)
     {
@@ -159,7 +159,7 @@ class ShardBuilder extends EloquentBuilder
     }
 
     /**
-     * {@inheritdoc}
+     * @inheritdoc
      */
     public function chunkById($count, callable $callback, $column = null, $alias = null)
     {
@@ -172,7 +172,7 @@ class ShardBuilder extends EloquentBuilder
     }
 
     /**
-     * {@inheritdoc}
+     * @inheritdoc
      */
     public function paginate($perPage = null, $columns = ['*'], $pageName = 'page', $page = null, $total = null)
     {
@@ -198,12 +198,12 @@ class ShardBuilder extends EloquentBuilder
         $skip = max(0, ($page - 1) * $perPage);
         $items = [];
 
-        while (! empty($current)) {
+        while (!empty($current)) {
             $candidate = null;
             $candidateKey = null;
 
             foreach ($current as $name => $model) {
-                if (! $candidate || $this->compareModels($model, $candidate) < 0) {
+                if (!$candidate || $this->compareModels($model, $candidate) < 0) {
                     $candidate = $model;
                     $candidateKey = $name;
                 }
@@ -235,7 +235,7 @@ class ShardBuilder extends EloquentBuilder
     }
 
     /**
-     * {@inheritdoc}
+     * @inheritdoc
      */
     public function firstOrCreate(array $attributes = [], array $values = [])
     {
@@ -247,7 +247,7 @@ class ShardBuilder extends EloquentBuilder
     }
 
     /**
-     * {@inheritdoc}
+     * @inheritdoc
      */
     public function updateOrCreate(array $attributes, array $values = [])
     {
@@ -289,7 +289,7 @@ class ShardBuilder extends EloquentBuilder
     {
         $orders = $this->getQuery()->orders ?? [];
 
-        if (! $orders) {
+        if (!$orders) {
             $orders[] = ['column' => $this->getModel()->getKeyName(), 'direction' => 'asc'];
         }
 
