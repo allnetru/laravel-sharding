@@ -1,12 +1,18 @@
 {
-    "name": "allnetru/sharding",
-    "description": "Laravel database sharding toolkit extracted from Boost",
+    "name": "allnetru/laravel-sharding",
+    "description": "Laravel database sharding toolkit",
+    "keywords": [
+        "laravel",
+        "laravel-sharding",
+        "sharding"
+    ],
     "type": "library",
     "license": "MIT",
     "authors": [
         {
-            "name": "allnetru",
-            "email": "dev@allnet.ru"
+            "name": "Alexey Torochkov",
+            "email": "all.net.ru@gmail.com",
+            "role": "Developer"
         }
     ],
     "require": {
@@ -43,6 +49,9 @@
     "scripts": {
         "test": "vendor/bin/phpunit"
     },
-    "minimum-stability": "stable",
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "dev",
     "prefer-stable": true
 }
