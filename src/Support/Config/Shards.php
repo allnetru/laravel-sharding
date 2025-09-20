@@ -43,7 +43,22 @@ class Shards
     /**
      * Build shard database connections from DB_SHARDS.
      *
-     * @return array<string, array<string, mixed>>
+     * @param  string|null  $definitions
+     * @return array<string, array{
+     *     driver: string,
+     *     username: string,
+     *     password: string,
+     *     charset: string,
+     *     collation: string,
+     *     prefix: string,
+     *     prefix_indexes: bool,
+     *     strict: bool,
+     *     engine: string|null,
+     *     options: array<int|string, mixed>,
+     *     host: string,
+     *     port: string,
+     *     database: string,
+     * }>
      */
     public static function databaseConnections(?string $definitions = null): array
     {
@@ -76,7 +91,8 @@ class Shards
     /**
      * Build shard weight configuration from DB_SHARDS.
      *
-     * @return array<string, array{weight:int}>
+     * @param  string|null  $definitions
+     * @return array<string, array{weight: int}>
      */
     public static function weights(?string $definitions = null): array
     {
@@ -101,15 +117,19 @@ class Shards
     /**
      * Build list of shards excluded during migration from DB_SHARD_MIGRATIONS.
      *
-     * @return array<string, bool>
+     * @param  string|null  $definitions
+     * @return array<string, true>
      */
     public static function migrations(?string $definitions = null): array
     {
         $definitions ??= (string) config('sharding.env.db_shard_migrations', '');
 
-        return collect(explode(';', $definitions))
+        /** @var array<string, true> $migrations */
+        $migrations = collect(explode(';', $definitions))
             ->filter()
             ->mapWithKeys(fn (string $name) => [trim($name) => true])
             ->all();
+
+        return $migrations;
     }
 }
