@@ -28,6 +28,7 @@ trait Shardable
     public array $replicaConnections = [];
 
     /**
+     * @param  Builder  $q
      * @return Builder
      *
      * @throws InvalidArgumentException
@@ -39,6 +40,8 @@ trait Shardable
 
     /**
      * Boot the shardable trait to assign connections and IDs on model creation.
+     *
+     * @return void
      */
     public static function bootShardable(): void
     {
@@ -95,8 +98,8 @@ trait Shardable
      * @param  string|null  $foreignKey
      * @param  string|null  $ownerKey
      * @param  string|null  $relation
-     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo<\Illuminate\Database\Eloquent\Model, $this>
-     * @phpstan-return ShardBelongsTo<\Illuminate\Database\Eloquent\Model, $this>
+     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo<Model, $this>
+     * @phpstan-return ShardBelongsTo<Model, $this>
      */
     public function belongsTo($related, $foreignKey = null, $ownerKey = null, $relation = null)
     {
@@ -221,6 +224,8 @@ trait Shardable
 
     /**
      * Get the attribute name used for sharding.
+     *
+     * @return string
      */
     public function getShardKey(): string
     {
@@ -231,6 +236,7 @@ trait Shardable
      * Create a new Eloquent query builder for the model.
      *
      * @param  \Illuminate\Database\Query\Builder  $query
+     * @return Builder
      */
     public function newEloquentBuilder($query): Builder
     {

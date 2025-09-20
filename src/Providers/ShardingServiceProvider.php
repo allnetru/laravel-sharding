@@ -17,6 +17,8 @@ class ShardingServiceProvider extends ServiceProvider
 {
     /**
      * Register services.
+     *
+     * @return void
      */
     public function register(): void
     {
@@ -33,6 +35,8 @@ class ShardingServiceProvider extends ServiceProvider
 
     /**
      * Bootstrap package services.
+     *
+     * @return void
      */
     public function boot(): void
     {

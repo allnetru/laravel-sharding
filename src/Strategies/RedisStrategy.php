@@ -16,6 +16,8 @@ class RedisStrategy implements RowMoveAware, Strategy
     /**
      * Determine shard connections for the given key from Redis.
      *
+     * @param  mixed  $key
+     * @param  array  $config
      * @return array<int, string>
      */
     public function determine(mixed $key, array $config): array
@@ -69,6 +71,11 @@ class RedisStrategy implements RowMoveAware, Strategy
 
     /**
      * Update Redis mapping after a record is moved.
+     *
+     * @param  int|string  $id
+     * @param  string  $connection
+     * @param  array  $config
+     * @return void
      */
     public function rowMoved(int|string $id, string $connection, array $config): void
     {

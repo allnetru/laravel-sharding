@@ -27,6 +27,8 @@ class Rebalance extends Command
 
     /**
      * Execute the console command.
+     *
+     * @return int
      */
     public function handle(): int
     {
@@ -66,6 +68,9 @@ class Rebalance extends Command
 
     /**
      * Resolve a model instance by table name.
+     *
+     * @param  string  $table
+     * @return Model|null
      */
     protected function resolveModelByTable(string $table): ?Model
     {
@@ -77,6 +82,6 @@ class Rebalance extends Command
             return null;
         }
 
-        return new $modelClass;
+        return new $modelClass();
     }
 }

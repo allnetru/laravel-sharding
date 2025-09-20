@@ -13,6 +13,9 @@ trait ResolvesShard
 {
     /**
      * Switch the relation query to the shard determined by the given key.
+     *
+     * @param  mixed  $key
+     * @return void
      */
     protected function switchConnection(mixed $key): void
     {

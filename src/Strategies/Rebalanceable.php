@@ -15,6 +15,13 @@ trait Rebalanceable
     /**
      * Move records between shard connections.
      *
+     * @param  string       $table
+     * @param  string       $key
+     * @param  string|null  $from
+     * @param  string|null  $to
+     * @param  int|null     $start
+     * @param  int|null     $end
+     * @param  array        $config
      * @return int number of moved records
      */
     public function rebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): int
