@@ -20,14 +20,17 @@ class ShardMorphTo extends MorphTo
             $type = $this->parent->{$this->morphType};
             $foreignKey = $this->getForeignKeyFrom($this->child);
 
+            /** @var TRelatedModel $instance */
             $instance = $this->createModelByType($type);
             $connection = app(ShardingManager::class)->connectionFor($instance, $foreignKey)[0];
 
             $instance->setConnection($connection);
             $this->related = $instance;
-            $this->query = $instance->newQuery();
-            $this->query->getModel()->setConnection($connection);
-            $this->query->getQuery()->connection = $this->query->getModel()->getConnection();
+            /** @var \Illuminate\Database\Eloquent\Builder<TRelatedModel> $query */
+            $query = $instance->newQuery();
+            $query->getModel()->setConnection($connection);
+            $query->getQuery()->connection = $query->getModel()->getConnection();
+            $this->query = $query;
 
             $this->ownerKey = $this->ownerKey ?: $instance->getKeyName();
             $this->query->where($this->getQualifiedOwnerKeyName(), '=', $foreignKey);

@@ -1,5 +1,7 @@
 <?php
 
+use Illuminate\Support\Env;
+
 return [
     /*
     |--------------------------------------------------------------------------
@@ -10,6 +12,27 @@ return [
     | Supported strategies are registered in the `strategies` array below.
     */
     'default' => 'hash',
+
+    /*
+    |--------------------------------------------------------------------------
+    | Environment configuration
+    |--------------------------------------------------------------------------
+    |
+    | Capture environment-driven values so they remain accessible after the
+    | config cache is generated. Runtime helpers pull values from this array
+    | instead of calling env() outside of this file.
+    */
+    'env' => [
+        'driver' => Env::get('DB_SHARD_DRIVER', 'mysql'),
+        'username' => Env::get('DB_USERNAME', 'forge'),
+        'password' => Env::get('DB_PASSWORD', ''),
+        'charset' => Env::get('DB_CHARSET', 'utf8mb4'),
+        'collation' => Env::get('DB_COLLATION', 'utf8mb4_unicode_ci'),
+        'port' => Env::get('DB_PORT', '3306'),
+        'mysql_attr_ssl_ca' => Env::get('MYSQL_ATTR_SSL_CA'),
+        'db_shards' => Env::get('DB_SHARDS', ''),
+        'db_shard_migrations' => Env::get('DB_SHARD_MIGRATIONS', ''),
+    ],
 
     /*
     |--------------------------------------------------------------------------

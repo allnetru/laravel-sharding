@@ -39,8 +39,11 @@ class DbRangeStrategy implements Strategy, SupportsAfterRebalance
 
         if ($range) {
             $range->setTable($rangeTable);
-            $primary = $range->connection;
-            $replicas = $range->replicas ?? [];
+            $primary = (string) $range->getAttribute('connection');
+            $replicas = $range->getAttribute('replicas');
+            if (!is_array($replicas)) {
+                $replicas = [];
+            }
             if (!$replicas && ($config['replica_count'] ?? 0) > 0) {
                 $connections = array_keys($config['connections'] ?? []);
                 sort($connections);
@@ -85,8 +88,8 @@ class DbRangeStrategy implements Strategy, SupportsAfterRebalance
             $range = $query->where('start', $start)->where('end', $end)->lockForUpdate()->first();
             if ($range) {
                 $range->setTable($rangeTable);
-                $range->connection = $primary;
-                $range->replicas = $replicas;
+                $range->setAttribute('connection', $primary);
+                $range->setAttribute('replicas', $replicas);
                 $range->save();
 
                 return;
@@ -127,10 +130,13 @@ class DbRangeStrategy implements Strategy, SupportsAfterRebalance
             $range = $query->where('start', $start)->where('end', $end)->lockForUpdate()->first();
             if ($range) {
                 $range->setTable($rangeTable);
-                $replicas = $range->replicas ?? [];
+                $replicas = $range->getAttribute('replicas');
+                if (!is_array($replicas)) {
+                    $replicas = [];
+                }
                 if (!in_array($connection, $replicas, true)) {
                     $replicas[] = $connection;
-                    $range->replicas = $replicas;
+                    $range->setAttribute('replicas', $replicas);
                     $range->save();
                 }
 

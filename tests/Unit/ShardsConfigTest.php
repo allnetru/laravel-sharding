@@ -12,16 +12,13 @@ class ShardsConfigTest extends TestCase
     #[DataProvider('invalidDsnProvider')]
     public function test_invalid_dsn_is_excluded(string $dsn): void
     {
-        putenv('DB_SHARDS=' . $dsn);
-        $_ENV['DB_SHARDS'] = $dsn;
-        $_SERVER['DB_SHARDS'] = $dsn;
+        config(['sharding.env.db_shards' => $dsn]);
         Log::shouldReceive('warning')->twice()->with(sprintf('Invalid shard DSN: %s', $dsn));
 
         $this->assertSame([], Shards::databaseConnections());
         $this->assertSame([], Shards::weights());
 
-        putenv('DB_SHARDS');
-        unset($_ENV['DB_SHARDS'], $_SERVER['DB_SHARDS']);
+        config(['sharding.env.db_shards' => '']);
     }
 
     public static function invalidDsnProvider(): array

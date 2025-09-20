@@ -42,8 +42,11 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
 
         if ($slot) {
             $slot->setTable($slotTable);
-            $primary = $slot->connection;
-            $replicas = $slot->replicas ?? [];
+            $primary = (string) $slot->getAttribute('connection');
+            $replicas = $slot->getAttribute('replicas');
+            if (!is_array($replicas)) {
+                $replicas = [];
+            }
             if (!$replicas && ($config['replica_count'] ?? 0) > 0) {
                 $connections = array_keys($config['connections'] ?? []);
                 sort($connections);
@@ -87,8 +90,8 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
             $slot = $query->where('slot', $slotId)->lockForUpdate()->first();
             if ($slot) {
                 $slot->setTable($slotTable);
-                $slot->connection = $primary;
-                $slot->replicas = $replicas;
+                $slot->setAttribute('connection', $primary);
+                $slot->setAttribute('replicas', $replicas);
                 $slot->save();
 
                 return;
@@ -127,10 +130,13 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
             $slot = $query->where('slot', $slotId)->lockForUpdate()->first();
             if ($slot) {
                 $slot->setTable($slotTable);
-                $replicas = $slot->replicas ?? [];
+                $replicas = $slot->getAttribute('replicas');
+                if (!is_array($replicas)) {
+                    $replicas = [];
+                }
                 if (!in_array($connection, $replicas, true)) {
                     $replicas[] = $connection;
-                    $slot->replicas = $replicas;
+                    $slot->setAttribute('replicas', $replicas);
                     $slot->save();
                 }
 
@@ -186,15 +192,18 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
                 $slot = (clone $query)->where('slot', $slotId)->lockForUpdate()->first();
                 if ($slot) {
                     $slot->setTable($slotTable);
-                    $replicas = $slot->replicas ?? [];
-                    $oldPrimary = $slot->connection;
+                    $replicas = $slot->getAttribute('replicas');
+                    if (!is_array($replicas)) {
+                        $replicas = [];
+                    }
+                    $oldPrimary = (string) $slot->getAttribute('connection');
                     if (($i = array_search($connection, $replicas, true)) !== false) {
                         $replicas[$i] = $oldPrimary;
                     } elseif (empty($replicas)) {
                         $replicas = $defaultReplicas;
                     }
-                    $slot->connection = $connection;
-                    $slot->replicas = $replicas;
+                    $slot->setAttribute('connection', $connection);
+                    $slot->setAttribute('replicas', $replicas);
                     $slot->save();
 
                     return;

@@ -17,19 +17,26 @@ class Shards
      */
     protected static function baseConfig(): array
     {
+        $options = [];
+        $sslCa = config('sharding.env.mysql_attr_ssl_ca');
+
+        if (extension_loaded('pdo_mysql')) {
+            $options = array_filter([
+                PDO::MYSQL_ATTR_SSL_CA => $sslCa ?: null,
+            ]);
+        }
+
         return [
-            'driver' => env('DB_SHARD_DRIVER', 'mysql'),
-            'username' => env('DB_USERNAME', 'forge'),
-            'password' => env('DB_PASSWORD', ''),
-            'charset' => env('DB_CHARSET', 'utf8mb4'),
-            'collation' => env('DB_COLLATION', 'utf8mb4_unicode_ci'),
+            'driver' => (string) config('sharding.env.driver', 'mysql'),
+            'username' => (string) config('sharding.env.username', 'forge'),
+            'password' => (string) config('sharding.env.password', ''),
+            'charset' => (string) config('sharding.env.charset', 'utf8mb4'),
+            'collation' => (string) config('sharding.env.collation', 'utf8mb4_unicode_ci'),
             'prefix' => '',
             'prefix_indexes' => true,
             'strict' => true,
             'engine' => null,
-            'options' => extension_loaded('pdo_mysql') ? array_filter([
-                PDO::MYSQL_ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
-            ]) : [],
+            'options' => $options,
         ];
     }
 
@@ -38,13 +45,15 @@ class Shards
      *
      * @return array<string, array<string, mixed>>
      */
-    public static function databaseConnections(): array
+    public static function databaseConnections(?string $definitions = null): array
     {
         $baseConfig = self::baseConfig();
+        $definitions ??= (string) config('sharding.env.db_shards', '');
+        $defaultPort = (string) config('sharding.env.port', '3306');
 
-        return collect(explode(';', (string) env('DB_SHARDS')))
+        return collect(explode(';', $definitions))
             ->filter()
-            ->mapWithKeys(function (string $dsn) use ($baseConfig) {
+            ->mapWithKeys(function (string $dsn) use ($baseConfig, $defaultPort) {
                 [$name, $host, $port, $database] = array_pad(explode(':', trim($dsn)), 4, null);
 
                 if (!$name || !$host || !$database) {
@@ -56,7 +65,7 @@ class Shards
                 return [
                     $name => array_merge($baseConfig, [
                         'host' => $host,
-                        'port' => $port ?: env('DB_PORT', '3306'),
+                        'port' => $port ?: $defaultPort,
                         'database' => $database,
                     ]),
                 ];
@@ -69,9 +78,11 @@ class Shards
      *
      * @return array<string, array{weight:int}>
      */
-    public static function weights(): array
+    public static function weights(?string $definitions = null): array
     {
-        return collect(explode(';', (string) env('DB_SHARDS')))
+        $definitions ??= (string) config('sharding.env.db_shards', '');
+
+        return collect(explode(';', $definitions))
             ->filter()
             ->mapWithKeys(function (string $dsn) {
                 [$name, $host, $port, $database] = array_pad(explode(':', trim($dsn)), 4, null);
@@ -92,9 +103,11 @@ class Shards
      *
      * @return array<string, bool>
      */
-    public static function migrations(): array
+    public static function migrations(?string $definitions = null): array
     {
-        return collect(explode(';', (string) env('DB_SHARD_MIGRATIONS')))
+        $definitions ??= (string) config('sharding.env.db_shard_migrations', '');
+
+        return collect(explode(';', $definitions))
             ->filter()
             ->mapWithKeys(fn (string $name) => [trim($name) => true])
             ->all();

@@ -6,6 +6,9 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * Sequence tracker for table-specific identifiers.
+ *
+ * @property string $table
+ * @property int $last_id
  */
 class ShardSequence extends Model
 {
@@ -20,4 +23,8 @@ class ShardSequence extends Model
     public $timestamps = false;
 
     protected $guarded = [];
+
+    protected $casts = [
+        'last_id' => 'int',
+    ];
 }
