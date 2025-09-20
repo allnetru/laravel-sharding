@@ -20,6 +20,30 @@ DB_SHARD_MIGRATIONS="shard-1;shard-2"
 
 Shards listed here are skipped for new writes until data is moved.
 
+### Database configuration
+
+Merge the generated shard connections into `config/database.php` so Laravel can resolve them just like first-party connections:
+
+```php
+use Allnetru\Sharding\Support\Config\Shards;
+
+return [
+    'default' => env('DB_CONNECTION', 'mysql'),
+
+    'connections' => array_merge([
+        'mysql' => [
+            'driver' => 'mysql',
+            'host' => env('DB_HOST', '127.0.0.1'),
+            'database' => env('DB_DATABASE', 'forge'),
+            // ... keep your existing base connections here
+        ],
+        // other non-sharded connections...
+    ], Shards::databaseConnections()),
+
+    // ...
+];
+```
+
 ### Creating a sharded table
 
 1. Create a migration with an unsigned BIGINT primary key and an `is_replica` boolean column:

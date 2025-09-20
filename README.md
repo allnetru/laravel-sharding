@@ -36,6 +36,118 @@ php artisan migrate
 2. When preparing to migrate or remove shards, list them in `DB_SHARD_MIGRATIONS`. New writes are skipped for shards in this list until you finish rebalancing.
 3. Review `config/sharding.php` to map tables to strategies, configure shard groups, and choose ID generators. Every shard-aware model should use the provided `Shardable` trait.
 
+A minimal example stitches these pieces together:
+
+```dotenv
+# .env
+DB_SHARDS="users_eu:10.0.0.10:3306:users_eu;users_us:10.0.0.11:3306:users_us;users_backup:10.0.0.12:3306:users_backup"
+DB_SHARD_MIGRATIONS="users_legacy;users_backup"
+```
+
+```php
+// config/sharding.php
+return [
+    'default' => 'hash',
+
+    'id_generator' => [
+        'default' => 'snowflake',
+        'strategies' => [
+            'snowflake' => Allnetru\\Sharding\\IdGenerators\\SnowflakeStrategy::class,
+            'sequence' => Allnetru\\Sharding\\IdGenerators\\TableSequenceStrategy::class,
+        ],
+        'sequence_table' => 'shard_sequences',
+        // 'meta_connection' => 'mysql',
+    ],
+
+    'connections' => [
+        'users_eu' => ['weight' => 2],
+        'users_us' => ['weight' => 1],
+        // 'users_backup' => ['weight' => 1, 'replica' => true],
+    ],
+
+    'replica_count' => 1,
+
+    'tables' => [
+        // 'users' => [
+        //     'strategy' => 'redis',
+        //     'redis_connection' => 'shards',
+        //     'redis_prefix' => 'user_shard:',
+        //     'group' => 'user_data',
+        // ],
+
+        'users' => [
+            'strategy' => 'db_hash_range',
+            'slot_size' => 250_000,
+            'connections' => [
+                'users_eu' => ['weight' => 2],
+                'users_us' => ['weight' => 1],
+            ],
+            'meta_connection' => 'mysql',
+            'group' => 'user_data',
+        ],
+
+        'profiles' => [
+            // inherits the shard selected for the `users` table
+            'group' => 'user_data',
+            // 'id_generator' => 'sequence',
+        ],
+
+        'orders' => [
+            'strategy' => 'db_range',
+            'connections' => [
+                'users_eu' => ['weight' => 2],
+                'users_us' => ['weight' => 1],
+            ],
+            'range_size' => 50_000,
+            'meta_connection' => 'mysql',
+            // 'range_table' => 'order_ranges',
+        ],
+
+        // 'payments' => [
+        //     'strategy' => 'range',
+        //     'ranges' => [
+        //         ['start' => 1, 'end' => 1_000_000, 'connection' => 'users_eu'],
+        //         ['start' => 1_000_001, 'end' => null, 'connection' => 'users_us'],
+        //     ],
+        // ],
+    ],
+
+    'groups' => [
+        'user_data' => ['users', 'profiles', 'orders'],
+        // 'billing' => ['payments', 'refunds'],
+    ],
+];
+```
+
+Update `config/database.php` to merge the generated shard connections with your base definitions:
+
+```php
+// config/database.php (excerpt)
+
+use Allnetru\Sharding\Support\Config\Shards;
+
+return [
+    'default' => env('DB_CONNECTION', 'mysql'),
+
+    'connections' => array_merge([
+        'mysql' => [
+            'driver' => 'mysql',
+            'url' => env('DB_URL'),
+            'host' => env('DB_HOST', '127.0.0.1'),
+            'port' => env('DB_PORT', '3306'),
+            'database' => env('DB_DATABASE', 'forge'),
+            'username' => env('DB_USERNAME', 'forge'),
+            'password' => env('DB_PASSWORD', ''),
+            // ... keep the rest of your base connection definition
+        ],
+
+        // other non-sharded connections...
+    ], Shards::databaseConnections()),
+
+    // ...
+];
+```
+
 A full walkthrough is available in [docs/en/sharding.md](docs/en/sharding.md).
 
 ## Usage
