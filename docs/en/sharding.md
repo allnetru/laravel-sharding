@@ -26,7 +26,6 @@ Merge the generated shard connections into `config/database.php` so Laravel can 
 
 ```php
 use Allnetru\Sharding\Support\Config\Shards;
-use Illuminate\Support\Str;
 
 return [
     'default' => env('DB_CONNECTION', 'mysql'),
@@ -41,19 +40,7 @@ return [
         // other non-sharded connections...
     ], Shards::databaseConnections()),
 
-    'migrations' => [
-        'table' => 'migrations',
-        'update_date_on_publish' => true,
-    ],
-
-    'redis' => [
-        'client' => env('REDIS_CLIENT', 'phpredis'),
-        'options' => [
-            'cluster' => env('REDIS_CLUSTER', 'redis'),
-            'prefix' => env('REDIS_PREFIX', Str::slug(env('APP_NAME', 'laravel'), '_') . '_database_'),
-        ],
-        // ... include your Redis connections as usual
-    ],
+    // ...
 ];
 ```
 
