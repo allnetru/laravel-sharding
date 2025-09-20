@@ -10,6 +10,8 @@ parameters:
     checkOctaneCompatibility: true
     checkModelProperties: true
     checkMissingIterableValueType: false
+    configDirectories:
+        - %currentWorkingDirectory%/config
 
 parametersSchema:
     checkMissingIterableValueType: bool()
