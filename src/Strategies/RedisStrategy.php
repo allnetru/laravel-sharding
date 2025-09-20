@@ -43,7 +43,7 @@ class RedisStrategy implements RowMoveAware, Strategy
             if (!$connections) {
                 throw new RuntimeException("Shard for key [$key] not found in Redis");
             }
-            $hashStrategy = new HashStrategy;
+            $hashStrategy = new HashStrategy();
             $primary = $hashStrategy->determine($key, $config)[0];
         }
 

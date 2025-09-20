@@ -13,6 +13,9 @@ use Illuminate\Pagination\Paginator;
  */
 class ShardBuilder extends EloquentBuilder
 {
+    /**
+     * Indicates whether the builder operates on a single shard connection.
+     */
     protected bool $singleConnection = false;
 
     /**
@@ -100,7 +103,10 @@ class ShardBuilder extends EloquentBuilder
     /**
      * Retrieve models with a global limit and offset across shards.
      *
-     * @return \Illuminate\Support\Collection
+     * @param  int|null  $limit
+     * @param  int|null  $offset
+     * @param  array<int, string>  $columns
+     * @return \Illuminate\Database\Eloquent\Collection<int, \Illuminate\Database\Eloquent\Model>
      */
     protected function getWithLimitAndOffset(?int $limit, ?int $offset, array $columns)
     {
@@ -287,6 +293,7 @@ class ShardBuilder extends EloquentBuilder
     /**
      * Find the first model across all shard connections.
      *
+     * @param  array<string, mixed>  $attributes
      * @return \Illuminate\Database\Eloquent\Model|null
      */
     protected function firstAcrossConnections(array $attributes)

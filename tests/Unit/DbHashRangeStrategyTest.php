@@ -34,7 +34,7 @@ class DbHashRangeStrategyTest extends TestCase
             $table->timestamps();
         });
 
-        $strategy = new DbHashRangeStrategy;
+        $strategy = new DbHashRangeStrategy();
         $key = 'key2';
 
         $resolved = $strategy->determine($key, $config);

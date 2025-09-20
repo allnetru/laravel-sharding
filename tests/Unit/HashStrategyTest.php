@@ -9,7 +9,7 @@ class HashStrategyTest extends TestCase
 {
     public function test_large_key_distribution(): void
     {
-        $strategy = new HashStrategy;
+        $strategy = new HashStrategy();
 
         $config = [
             'connections' => [

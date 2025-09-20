@@ -22,7 +22,7 @@ class ShardingReplicaTest extends TestCase
             'replica_count' => 2,
         ]);
 
-        $manager = new ShardingManager;
+        $manager = new ShardingManager();
         $key = 'example';
         $connections = $manager->connectionFor('users', $key);
 
