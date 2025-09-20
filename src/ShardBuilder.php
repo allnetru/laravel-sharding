@@ -28,6 +28,9 @@ class ShardBuilder extends EloquentBuilder
 
     /**
      * Create a replica builder for the specified connection.
+     *
+     * @param string $connection
+     * @return self
      */
     protected function replicateForConnection(string $connection): self
     {
