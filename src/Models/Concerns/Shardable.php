@@ -41,7 +41,7 @@ trait Shardable
     public static function bootShardable(): void
     {
         static::addGlobalScope('without_replicas', function (Builder $builder): void {
-            $builder->withoutReplicas();
+            $builder->where($builder->qualifyColumn('is_replica'), false);
         });
 
         static::creating(function ($model): void {
@@ -93,7 +93,8 @@ trait Shardable
      * @param  string|null  $foreignKey
      * @param  string|null  $ownerKey
      * @param  string|null  $relation
-     * @return ShardBelongsTo
+     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo<\Illuminate\Database\Eloquent\Model, $this>
+     * @phpstan-return ShardBelongsTo<\Illuminate\Database\Eloquent\Model, $this>
      */
     public function belongsTo($related, $foreignKey = null, $ownerKey = null, $relation = null)
     {

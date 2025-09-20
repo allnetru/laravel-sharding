@@ -29,7 +29,7 @@ class ShardBuilder extends EloquentBuilder
         $query->connection = $model->getConnection();
         $builder = new EloquentBuilder($query);
         $builder->setModel($model);
-        $builder->withoutReplicas();
+        $builder->where($builder->qualifyColumn('is_replica'), false);
         $builder->setEagerLoads($this->getEagerLoads());
 
         return $builder;
@@ -99,8 +99,9 @@ class ShardBuilder extends EloquentBuilder
         $current = [];
 
         foreach ($this->connections() as $name => $config) {
-            $builder = $this->replicateForConnection($name);
-            $iterator = $builder->cursor($columns)->getIterator();
+            $builder = $this->replicateForConnection($name)->select($columns);
+            /** @var \Generator<int, \Illuminate\Database\Eloquent\Model> $iterator */
+            $iterator = $builder->cursor()->getIterator();
             $iterator->rewind();
 
             if ($iterator->valid()) {
@@ -186,6 +187,7 @@ class ShardBuilder extends EloquentBuilder
         foreach ($this->connections() as $name => $config) {
             $builder = $this->replicateForConnection($name);
             $total += $builder->count();
+            /** @var \Generator<int, \Illuminate\Database\Eloquent\Model> $iterator */
             $iterator = $builder->cursor()->getIterator();
             $iterator->rewind();
 

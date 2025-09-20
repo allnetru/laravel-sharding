@@ -2,6 +2,7 @@
 
 namespace Allnetru\Sharding\Strategies;
 
+use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Support\Facades\Redis;
 use RuntimeException;
 
@@ -21,6 +22,7 @@ class RedisStrategy implements RowMoveAware, Strategy
     {
         $connection = $config['redis_connection'] ?? 'default';
         $prefix = $config['redis_prefix'] ?? ('shard:' . ($config['table'] ?? ''));
+        /** @var PhpRedisConnection $redis */
         $redis = Redis::connection($connection);
         $value = $redis->get($prefix . $key);
 
@@ -72,6 +74,7 @@ class RedisStrategy implements RowMoveAware, Strategy
     {
         $redisConnection = $config['redis_connection'] ?? 'default';
         $prefix = $config['redis_prefix'] ?? ('shard:' . ($config['table'] ?? ''));
+        /** @var PhpRedisConnection $redis */
         $redis = Redis::connection($redisConnection);
         $current = $redis->get($prefix . $id);
         $decoded = $current !== null ? json_decode($current, true) : null;
@@ -104,7 +107,9 @@ class RedisStrategy implements RowMoveAware, Strategy
     {
         $redisConnection = $config['redis_connection'] ?? 'default';
         $prefix = $config['redis_prefix'] ?? ('shard:' . ($config['table'] ?? ''));
-        Redis::connection($redisConnection)->set($prefix . $key, json_encode($connections));
+        /** @var PhpRedisConnection $redis */
+        $redis = Redis::connection($redisConnection);
+        $redis->set($prefix . $key, json_encode($connections));
     }
 
     /**
@@ -114,6 +119,7 @@ class RedisStrategy implements RowMoveAware, Strategy
     {
         $redisConnection = $config['redis_connection'] ?? 'default';
         $prefix = $config['redis_prefix'] ?? ('shard:' . ($config['table'] ?? ''));
+        /** @var PhpRedisConnection $redis */
         $redis = Redis::connection($redisConnection);
         $current = $redis->get($prefix . $key);
         $decoded = $current !== null ? json_decode($current, true) : null;

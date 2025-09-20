@@ -18,7 +18,7 @@ interface Strategy
     /**
      * Persist metadata about the primary shard for the given key.
      *
-     * @param  string  $connection
+     * @param  array<int, string>  $connections
      */
     public function recordMeta(mixed $key, array $connections, array $config): void;
 

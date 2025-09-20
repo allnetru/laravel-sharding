@@ -19,7 +19,11 @@ class ShardHasOneThrough extends HasOneThrough
     /** @inheritDoc */
     public function addConstraints()
     {
-        $this->switchConnection($this->getParentKey());
+        $key = $this->farParent->{$this->localKey} ?? null;
+
+        if ($key !== null) {
+            $this->switchConnection($key);
+        }
         parent::addConstraints();
     }
 }

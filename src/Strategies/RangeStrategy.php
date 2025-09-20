@@ -7,7 +7,7 @@ use InvalidArgumentException;
 /**
  * Distributes records across shards using configured numeric ranges.
  */
-class RangeStrategy implements Strategy
+class RangeStrategy implements Strategy, SupportsAfterRebalance
 {
     use Rebalanceable;
 
@@ -68,7 +68,7 @@ class RangeStrategy implements Strategy
     /**
      * Update configuration ranges after rebalancing.
      */
-    protected function afterRebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): void
+    public function afterRebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): void
     {
         if (!$to) {
             return;

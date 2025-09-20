@@ -9,7 +9,7 @@ use InvalidArgumentException;
 /**
  * Stores shard range mappings in a database table.
  */
-class DbRangeStrategy implements Strategy
+class DbRangeStrategy implements Strategy, SupportsAfterRebalance
 {
     use Rebalanceable;
 
@@ -159,7 +159,7 @@ class DbRangeStrategy implements Strategy
     /**
      * Persist new range information after rebalancing.
      */
-    protected function afterRebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): void
+    public function afterRebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): void
     {
         if (!$to || $start === null) {
             return;

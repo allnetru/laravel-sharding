@@ -89,7 +89,7 @@ trait Rebalanceable
             }, $key);
         }
 
-        if (method_exists($this, 'afterRebalance')) {
+        if ($this instanceof SupportsAfterRebalance) {
             $this->afterRebalance($table, $key, $from, $to, $start, $end, $config);
         }
 
