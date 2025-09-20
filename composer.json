@@ -11,15 +11,15 @@
     ],
     "require": {
         "php": "^8.2",
-        "illuminate/support": "^10.0|^11.0|^12.0",
-        "illuminate/database": "^10.0|^11.0|^12.0",
-        "illuminate/console": "^10.0|^11.0|^12.0",
-        "illuminate/pagination": "^10.0|^11.0|^12.0",
-        "illuminate/redis": "^10.0|^11.0|^12.0"
+        "illuminate/support": "^12.0",
+        "illuminate/database": "^12.0",
+        "illuminate/console": "^12.0",
+        "illuminate/pagination": "^12.0",
+        "illuminate/redis": "^12.0"
     },
     "require-dev": {
         "friendsofphp/php-cs-fixer": "^3.87",
-        "orchestra/testbench": "^8.0|^9.0|^10.0",
+        "orchestra/testbench": "^10.0",
         "phpstan/phpstan": "^2.1",
         "phpunit/phpunit": "^10.5|^11.0"
     },
