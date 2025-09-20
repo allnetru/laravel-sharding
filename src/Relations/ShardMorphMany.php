@@ -8,13 +8,14 @@ use Illuminate\Database\Eloquent\Relations\MorphMany;
 /**
  * @template TRelatedModel of \Illuminate\Database\Eloquent\Model
  * @template TDeclaringModel of \Illuminate\Database\Eloquent\Model
+ *
  * @extends MorphMany<TRelatedModel, TDeclaringModel>
  */
 class ShardMorphMany extends MorphMany
 {
     use ResolvesShard;
 
-    /** @inheritDoc */
+    /** {@inheritDoc} */
     public function addConstraints()
     {
         if (static::$constraints) {

@@ -12,8 +12,6 @@ class HashStrategy implements Strategy
     /**
      * Determine shard connections for the given key.
      *
-     * @param  mixed  $key
-     * @param  array  $config
      * @return array<int, string>
      */
     public function determine(mixed $key, array $config): array
@@ -54,7 +52,7 @@ class HashStrategy implements Strategy
     }
 
     /**
-     * @inheritdoc
+     * {@inheritdoc}
      */
     public function recordMeta(mixed $key, array $connections, array $config): void
     {
@@ -62,7 +60,7 @@ class HashStrategy implements Strategy
     }
 
     /**
-     * @inheritdoc
+     * {@inheritdoc}
      */
     public function recordReplica(mixed $key, string $connection, array $config): void
     {
@@ -70,7 +68,7 @@ class HashStrategy implements Strategy
     }
 
     /**
-     * @inheritdoc
+     * {@inheritdoc}
      */
     public function canRebalance(): bool
     {
@@ -78,7 +76,7 @@ class HashStrategy implements Strategy
     }
 
     /**
-     * @inheritdoc
+     * {@inheritdoc}
      */
     public function rebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): int
     {

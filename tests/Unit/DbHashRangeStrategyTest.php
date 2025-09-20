@@ -5,8 +5,8 @@ namespace Allnetru\Sharding\Tests\Unit;
 use Allnetru\Sharding\Models\ShardSlot;
 use Allnetru\Sharding\Strategies\DbHashRangeStrategy;
 use Allnetru\Sharding\Strategies\HashStrategy;
-use Illuminate\Support\Facades\DB;
 use Allnetru\Sharding\Tests\TestCase;
+use Illuminate\Support\Facades\DB;
 
 class DbHashRangeStrategyTest extends TestCase
 {
@@ -34,7 +34,7 @@ class DbHashRangeStrategyTest extends TestCase
             $table->timestamps();
         });
 
-        $strategy = new DbHashRangeStrategy();
+        $strategy = new DbHashRangeStrategy;
         $key = 'key2';
 
         $resolved = $strategy->determine($key, $config);

@@ -10,11 +10,12 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  *
  * @template TRelatedModel of \Illuminate\Database\Eloquent\Model
  * @template TDeclaringModel of \Illuminate\Database\Eloquent\Model
+ *
  * @extends BelongsTo<TRelatedModel, TDeclaringModel>
  */
 class ShardBelongsTo extends BelongsTo
 {
-    /** @inheritDoc */
+    /** {@inheritDoc} */
     public function addConstraints()
     {
         if (static::$constraints) {

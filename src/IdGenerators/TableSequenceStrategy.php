@@ -15,7 +15,6 @@ class TableSequenceStrategy implements Strategy
      * Generate the next sequence value for a table.
      *
      * @param  array<string, mixed>  $config
-     * @return int
      */
     public function generate(array $config): int
     {

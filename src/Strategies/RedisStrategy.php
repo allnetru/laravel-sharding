@@ -8,23 +8,21 @@ use RuntimeException;
 /**
  * Stores shard assignments in Redis.
  */
-class RedisStrategy implements Strategy, RowMoveAware
+class RedisStrategy implements RowMoveAware, Strategy
 {
     use Rebalanceable;
 
     /**
      * Determine shard connections for the given key from Redis.
      *
-     * @param  mixed  $key
-     * @param  array  $config
      * @return array<int, string>
      */
     public function determine(mixed $key, array $config): array
     {
         $connection = $config['redis_connection'] ?? 'default';
-        $prefix = $config['redis_prefix'] ?? ('shard:' . ($config['table'] ?? ''));
+        $prefix = $config['redis_prefix'] ?? ('shard:'.($config['table'] ?? ''));
         $redis = Redis::connection($connection);
-        $value = $redis->get($prefix . $key);
+        $value = $redis->get($prefix.$key);
 
         if ($value !== null) {
             $decoded = json_decode($value, true);
@@ -38,10 +36,10 @@ class RedisStrategy implements Strategy, RowMoveAware
 
         $connections = $config['connections'] ?? [];
         if ($primary === null) {
-            if (!$connections) {
+            if (! $connections) {
                 throw new RuntimeException("Shard for key [$key] not found in Redis");
             }
-            $hashStrategy = new HashStrategy();
+            $hashStrategy = new HashStrategy;
             $primary = $hashStrategy->determine($key, $config)[0];
         }
 
@@ -60,7 +58,7 @@ class RedisStrategy implements Strategy, RowMoveAware
     }
 
     /**
-     * @inheritdoc
+     * {@inheritdoc}
      */
     public function canRebalance(): bool
     {
@@ -69,18 +67,13 @@ class RedisStrategy implements Strategy, RowMoveAware
 
     /**
      * Update Redis mapping after a record is moved.
-     *
-     * @param  int|string  $id
-     * @param  string      $connection
-     * @param  array       $config
-     * @return void
      */
     public function rowMoved(int|string $id, string $connection, array $config): void
     {
         $redisConnection = $config['redis_connection'] ?? 'default';
-        $prefix = $config['redis_prefix'] ?? ('shard:' . ($config['table'] ?? ''));
+        $prefix = $config['redis_prefix'] ?? ('shard:'.($config['table'] ?? ''));
         $redis = Redis::connection($redisConnection);
-        $current = $redis->get($prefix . $id);
+        $current = $redis->get($prefix.$id);
         $decoded = $current !== null ? json_decode($current, true) : null;
         $currentConnections = is_array($decoded) ? $decoded : array_filter([$decoded]);
 
@@ -101,34 +94,34 @@ class RedisStrategy implements Strategy, RowMoveAware
             }
         }
 
-        $redis->set($prefix . $id, json_encode(array_merge([$connection], $replicas)));
+        $redis->set($prefix.$id, json_encode(array_merge([$connection], $replicas)));
     }
 
     /**
-     * @inheritdoc
+     * {@inheritdoc}
      */
     public function recordMeta(mixed $key, array $connections, array $config): void
     {
         $redisConnection = $config['redis_connection'] ?? 'default';
-        $prefix = $config['redis_prefix'] ?? ('shard:' . ($config['table'] ?? ''));
-        Redis::connection($redisConnection)->set($prefix . $key, json_encode($connections));
+        $prefix = $config['redis_prefix'] ?? ('shard:'.($config['table'] ?? ''));
+        Redis::connection($redisConnection)->set($prefix.$key, json_encode($connections));
     }
 
     /**
-     * @inheritdoc
+     * {@inheritdoc}
      */
     public function recordReplica(mixed $key, string $connection, array $config): void
     {
         $redisConnection = $config['redis_connection'] ?? 'default';
-        $prefix = $config['redis_prefix'] ?? ('shard:' . ($config['table'] ?? ''));
+        $prefix = $config['redis_prefix'] ?? ('shard:'.($config['table'] ?? ''));
         $redis = Redis::connection($redisConnection);
-        $current = $redis->get($prefix . $key);
+        $current = $redis->get($prefix.$key);
         $decoded = $current !== null ? json_decode($current, true) : null;
         $connections = is_array($decoded) ? $decoded : array_filter([$decoded]);
 
-        if (!in_array($connection, $connections, true)) {
+        if (! in_array($connection, $connections, true)) {
             $connections[] = $connection;
-            $redis->set($prefix . $key, json_encode($connections));
+            $redis->set($prefix.$key, json_encode($connections));
         }
     }
 }

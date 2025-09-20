@@ -47,7 +47,7 @@ class Shards
             ->mapWithKeys(function (string $dsn) use ($baseConfig) {
                 [$name, $host, $port, $database] = array_pad(explode(':', trim($dsn)), 4, null);
 
-                if (!$name || !$host || !$database) {
+                if (! $name || ! $host || ! $database) {
                     Log::warning(sprintf('Invalid shard DSN: %s', $dsn));
 
                     return [];
@@ -76,7 +76,7 @@ class Shards
             ->mapWithKeys(function (string $dsn) {
                 [$name, $host, $port, $database] = array_pad(explode(':', trim($dsn)), 4, null);
 
-                if (!$name || !$host || !$database) {
+                if (! $name || ! $host || ! $database) {
                     Log::warning(sprintf('Invalid shard DSN: %s', $dsn));
 
                     return [];

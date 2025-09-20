@@ -21,9 +21,6 @@ class ShardBuilder extends EloquentBuilder
 
     /**
      * Create a replica builder for the specified connection.
-     *
-     * @param  string  $connection
-     * @return EloquentBuilder
      */
     protected function replicateForConnection(string $connection): EloquentBuilder
     {
@@ -39,7 +36,7 @@ class ShardBuilder extends EloquentBuilder
     }
 
     /**
-     * @inheritdoc
+     * {@inheritdoc}
      */
     public function get($columns = ['*'])
     {
@@ -70,17 +67,17 @@ class ShardBuilder extends EloquentBuilder
             foreach ($batches as $name => $items) {
                 $index = $indexes[$name];
 
-                if (!isset($items[$index])) {
+                if (! isset($items[$index])) {
                     continue;
                 }
 
-                if (!$candidate || $this->compareModels($items[$index], $candidate) < 0) {
+                if (! $candidate || $this->compareModels($items[$index], $candidate) < 0) {
                     $candidate = $items[$index];
                     $candidateKey = $name;
                 }
             }
 
-            if (!$candidate) {
+            if (! $candidate) {
                 break;
             }
 
@@ -94,9 +91,6 @@ class ShardBuilder extends EloquentBuilder
     /**
      * Retrieve models with a global limit and offset across shards.
      *
-     * @param  int|null  $limit
-     * @param  int|null  $offset
-     * @param  array  $columns
      * @return \Illuminate\Support\Collection
      */
     protected function getWithLimitAndOffset(?int $limit, ?int $offset, array $columns)
@@ -118,12 +112,12 @@ class ShardBuilder extends EloquentBuilder
         $skip = max(0, $offset ?? 0);
         $items = [];
 
-        while (!empty($current)) {
+        while (! empty($current)) {
             $candidate = null;
             $candidateKey = null;
 
             foreach ($current as $name => $model) {
-                if (!$candidate || $this->compareModels($model, $candidate) < 0) {
+                if (! $candidate || $this->compareModels($model, $candidate) < 0) {
                     $candidate = $model;
                     $candidateKey = $name;
                 }
@@ -152,7 +146,7 @@ class ShardBuilder extends EloquentBuilder
     }
 
     /**
-     * @inheritdoc
+     * {@inheritdoc}
      */
     public function chunk($count, callable $callback)
     {
@@ -165,7 +159,7 @@ class ShardBuilder extends EloquentBuilder
     }
 
     /**
-     * @inheritdoc
+     * {@inheritdoc}
      */
     public function chunkById($count, callable $callback, $column = null, $alias = null)
     {
@@ -178,7 +172,7 @@ class ShardBuilder extends EloquentBuilder
     }
 
     /**
-     * @inheritdoc
+     * {@inheritdoc}
      */
     public function paginate($perPage = null, $columns = ['*'], $pageName = 'page', $page = null, $total = null)
     {
@@ -204,12 +198,12 @@ class ShardBuilder extends EloquentBuilder
         $skip = max(0, ($page - 1) * $perPage);
         $items = [];
 
-        while (!empty($current)) {
+        while (! empty($current)) {
             $candidate = null;
             $candidateKey = null;
 
             foreach ($current as $name => $model) {
-                if (!$candidate || $this->compareModels($model, $candidate) < 0) {
+                if (! $candidate || $this->compareModels($model, $candidate) < 0) {
                     $candidate = $model;
                     $candidateKey = $name;
                 }
@@ -241,7 +235,7 @@ class ShardBuilder extends EloquentBuilder
     }
 
     /**
-     * @inheritdoc
+     * {@inheritdoc}
      */
     public function firstOrCreate(array $attributes = [], array $values = [])
     {
@@ -253,7 +247,7 @@ class ShardBuilder extends EloquentBuilder
     }
 
     /**
-     * @inheritdoc
+     * {@inheritdoc}
      */
     public function updateOrCreate(array $attributes, array $values = [])
     {
@@ -270,7 +264,6 @@ class ShardBuilder extends EloquentBuilder
     /**
      * Find the first model across all shard connections.
      *
-     * @param  array  $attributes
      * @return \Illuminate\Database\Eloquent\Model|null
      */
     protected function firstAcrossConnections(array $attributes)
@@ -291,13 +284,12 @@ class ShardBuilder extends EloquentBuilder
      *
      * @param  \Illuminate\Database\Eloquent\Model  $a
      * @param  \Illuminate\Database\Eloquent\Model  $b
-     * @return int
      */
     protected function compareModels($a, $b): int
     {
         $orders = $this->getQuery()->orders ?? [];
 
-        if (!$orders) {
+        if (! $orders) {
             $orders[] = ['column' => $this->getModel()->getKeyName(), 'direction' => 'asc'];
         }
 

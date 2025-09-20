@@ -2,13 +2,13 @@
 
 namespace Allnetru\Sharding\Tests\Unit;
 
-use Allnetru\Sharding\Models\Concerns\Shardable;
 use Allnetru\Sharding\IdGenerator;
+use Allnetru\Sharding\Models\Concerns\Shardable;
 use Allnetru\Sharding\ShardingManager;
+use Allnetru\Sharding\Tests\TestCase;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
-use Allnetru\Sharding\Tests\TestCase;
 
 class ShardBelongsToRelationTest extends TestCase
 {
@@ -34,7 +34,8 @@ class ShardBelongsToRelationTest extends TestCase
         ]);
 
         app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
-        app()->singleton(IdGenerator::class, fn () => new class() {
+        app()->singleton(IdGenerator::class, fn () => new class
+        {
             private int $id = 0;
 
             public function generate($model): int
@@ -57,7 +58,7 @@ class ShardBelongsToRelationTest extends TestCase
         }
     }
 
-    public function testBelongsToLoadsAcrossShards(): void
+    public function test_belongs_to_loads_across_shards(): void
     {
         $organization = new TestOrganization(['id' => 1]);
         $organization->save();
@@ -73,7 +74,7 @@ class ShardBelongsToRelationTest extends TestCase
         );
     }
 
-    public function testBelongsToReturnsNullWhenForeignKeyIsMissing(): void
+    public function test_belongs_to_returns_null_when_foreign_key_is_missing(): void
     {
         $user = new TestUser(['id' => 5, 'organization_id' => null]);
         $user->save();

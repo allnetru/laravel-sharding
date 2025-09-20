@@ -28,8 +28,6 @@ trait Shardable
     public array $replicaConnections = [];
 
     /**
-     * @param Builder $q
-     * @return void
      * @throws InvalidArgumentException
      */
     public function scopeWithoutReplicas(Builder $q): void
@@ -39,8 +37,6 @@ trait Shardable
 
     /**
      * Boot the shardable trait to assign connections and IDs on model creation.
-     *
-     * @return void
      */
     public static function bootShardable(): void
     {
@@ -58,7 +54,7 @@ trait Shardable
             $keyName = $model->getShardKey();
             $key = $model->getAttribute($keyName);
 
-            if (!$key) {
+            if (! $key) {
                 $key = app(IdGenerator::class)->generate($model);
                 $model->setAttribute($keyName, $key);
             }
@@ -108,7 +104,7 @@ trait Shardable
         $instance = $this->newRelatedInstance($related);
 
         if (is_null($foreignKey)) {
-            $foreignKey = Str::snake($relation) . '_' . $instance->getKeyName();
+            $foreignKey = Str::snake($relation).'_'.$instance->getKeyName();
         }
 
         $ownerKey = $ownerKey ?: $instance->getKeyName();
@@ -123,7 +119,7 @@ trait Shardable
     }
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      */
     protected function newHasOne(Builder $query, Model $parent, $foreignKey, $localKey)
     {
@@ -131,7 +127,7 @@ trait Shardable
     }
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      */
     protected function newHasMany(Builder $query, Model $parent, $foreignKey, $localKey)
     {
@@ -139,7 +135,7 @@ trait Shardable
     }
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      */
     protected function newHasOneThrough(Builder $query, Model $farParent, Model $throughParent, $firstKey, $secondKey, $localKey, $secondLocalKey)
     {
@@ -147,7 +143,7 @@ trait Shardable
     }
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      */
     protected function newHasManyThrough(Builder $query, Model $farParent, Model $throughParent, $firstKey, $secondKey, $localKey, $secondLocalKey)
     {
@@ -155,7 +151,7 @@ trait Shardable
     }
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      */
     protected function newMorphOne(Builder $query, Model $parent, $type, $id, $localKey)
     {
@@ -163,7 +159,7 @@ trait Shardable
     }
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      */
     protected function newMorphMany(Builder $query, Model $parent, $type, $id, $localKey)
     {
@@ -171,7 +167,7 @@ trait Shardable
     }
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      */
     protected function newBelongsToMany(Builder $query, Model $parent, $table, $foreignPivotKey, $relatedPivotKey, $parentKey, $relatedKey, $relationName = null)
     {
@@ -179,7 +175,7 @@ trait Shardable
     }
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      */
     protected function newMorphToMany(Builder $query, Model $parent, $name, $table, $foreignPivotKey, $relatedPivotKey, $parentKey, $relatedKey, $relationName = null, $inverse = false)
     {
@@ -187,7 +183,7 @@ trait Shardable
     }
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      */
     protected function newMorphTo(Builder $query, Model $parent, $foreignKey, $ownerKey, $type, $relation)
     {
@@ -208,7 +204,7 @@ trait Shardable
         $keyName = $this->getShardKey();
         $key = $this->getAttribute($keyName);
 
-        if (!$key) {
+        if (! $key) {
             $key = app(IdGenerator::class)->generate($this);
             $this->setAttribute($keyName, $key);
         }
@@ -222,8 +218,6 @@ trait Shardable
 
     /**
      * Get the attribute name used for sharding.
-     *
-     * @return string
      */
     public function getShardKey(): string
     {
@@ -234,7 +228,6 @@ trait Shardable
      * Create a new Eloquent query builder for the model.
      *
      * @param  \Illuminate\Database\Query\Builder  $query
-     * @return Builder
      */
     public function newEloquentBuilder($query): Builder
     {

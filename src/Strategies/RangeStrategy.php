@@ -14,8 +14,6 @@ class RangeStrategy implements Strategy
     /**
      * Determine shard connections for a key based on configured ranges.
      *
-     * @param  mixed  $key
-     * @param  array  $config
      * @return array<int, string>
      */
     public function determine(mixed $key, array $config): array
@@ -44,7 +42,7 @@ class RangeStrategy implements Strategy
     }
 
     /**
-     * @inheritdoc
+     * {@inheritdoc}
      */
     public function recordMeta(mixed $key, array $connections, array $config): void
     {
@@ -52,7 +50,7 @@ class RangeStrategy implements Strategy
     }
 
     /**
-     * @inheritdoc
+     * {@inheritdoc}
      */
     public function recordReplica(mixed $key, string $connection, array $config): void
     {
@@ -60,7 +58,7 @@ class RangeStrategy implements Strategy
     }
 
     /**
-     * @inheritdoc
+     * {@inheritdoc}
      */
     public function canRebalance(): bool
     {
@@ -69,19 +67,10 @@ class RangeStrategy implements Strategy
 
     /**
      * Update configuration ranges after rebalancing.
-     *
-     * @param  string       $table
-     * @param  string       $key
-     * @param  string|null  $from
-     * @param  string|null  $to
-     * @param  int|null     $start
-     * @param  int|null     $end
-     * @param  array        $config
-     * @return void
      */
     protected function afterRebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): void
     {
-        if (!$to) {
+        if (! $to) {
             return;
         }
 

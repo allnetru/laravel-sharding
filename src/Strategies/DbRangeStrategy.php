@@ -16,8 +16,6 @@ class DbRangeStrategy implements Strategy
     /**
      * Determine shard connections for a key using database ranges.
      *
-     * @param  mixed  $key
-     * @param  array  $config
      * @return array<int, string>
      */
     public function determine(mixed $key, array $config): array
@@ -27,7 +25,7 @@ class DbRangeStrategy implements Strategy
         $rangeSize = $config['range_size'] ?? 1000;
         $scope = $config['group'] ?? $config['table'] ?? null;
 
-        if (!$scope) {
+        if (! $scope) {
             throw new InvalidArgumentException('No table scope provided for sharding.');
         }
 
@@ -41,7 +39,7 @@ class DbRangeStrategy implements Strategy
             $range->setTable($rangeTable);
             $primary = $range->connection;
             $replicas = $range->replicas ?? [];
-            if (!$replicas && ($config['replica_count'] ?? 0) > 0) {
+            if (! $replicas && ($config['replica_count'] ?? 0) > 0) {
                 $connections = array_keys($config['connections'] ?? []);
                 sort($connections);
                 $index = array_search($primary, $connections, true);
@@ -62,7 +60,7 @@ class DbRangeStrategy implements Strategy
     }
 
     /**
-     * @inheritdoc
+     * {@inheritdoc}
      */
     public function recordMeta(mixed $key, array $connections, array $config): void
     {
@@ -71,7 +69,7 @@ class DbRangeStrategy implements Strategy
         $rangeSize = $config['range_size'] ?? 1000;
         $scope = $config['group'] ?? $config['table'] ?? null;
 
-        if (!$scope) {
+        if (! $scope) {
             throw new InvalidArgumentException('No table scope provided for sharding.');
         }
 
@@ -106,7 +104,7 @@ class DbRangeStrategy implements Strategy
     }
 
     /**
-     * @inheritdoc
+     * {@inheritdoc}
      */
     public function recordReplica(mixed $key, string $connection, array $config): void
     {
@@ -115,7 +113,7 @@ class DbRangeStrategy implements Strategy
         $rangeSize = $config['range_size'] ?? 1000;
         $scope = $config['group'] ?? $config['table'] ?? null;
 
-        if (!$scope) {
+        if (! $scope) {
             throw new InvalidArgumentException('No table scope provided for sharding.');
         }
 
@@ -128,7 +126,7 @@ class DbRangeStrategy implements Strategy
             if ($range) {
                 $range->setTable($rangeTable);
                 $replicas = $range->replicas ?? [];
-                if (!in_array($connection, $replicas, true)) {
+                if (! in_array($connection, $replicas, true)) {
                     $replicas[] = $connection;
                     $range->replicas = $replicas;
                     $range->save();
@@ -151,7 +149,7 @@ class DbRangeStrategy implements Strategy
     }
 
     /**
-     * @inheritdoc
+     * {@inheritdoc}
      */
     public function canRebalance(): bool
     {
@@ -160,19 +158,10 @@ class DbRangeStrategy implements Strategy
 
     /**
      * Persist new range information after rebalancing.
-     *
-     * @param  string       $table
-     * @param  string       $key
-     * @param  string|null  $from
-     * @param  string|null  $to
-     * @param  int|null     $start
-     * @param  int|null     $end
-     * @param  array        $config
-     * @return void
      */
     protected function afterRebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): void
     {
-        if (!$to || $start === null) {
+        if (! $to || $start === null) {
             return;
         }
 
@@ -201,8 +190,6 @@ class DbRangeStrategy implements Strategy
      * Build replica connection list.
      *
      * @param  array<int, string>  $connections
-     * @param  int  $index
-     * @param  int  $replicaCount
      * @return array<int, string>
      */
     private function buildReplicas(array $connections, int $index, int $replicaCount): array

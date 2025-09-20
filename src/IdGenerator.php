@@ -29,9 +29,6 @@ class IdGenerator
 
     /**
      * Generate an ID for the given model.
-     *
-     * @param  Model|string  $model
-     * @return int
      */
     public function generate(Model|string $model): int
     {
@@ -43,7 +40,7 @@ class IdGenerator
         $strategyName = $tableConfig['id_generator'] ?? $idConfig['default'] ?? null;
         $strategyClass = $idConfig['strategies'][$strategyName] ?? null;
 
-        if (!$strategyClass) {
+        if (! $strategyClass) {
             throw new RuntimeException("ID generator strategy [$strategyName] not configured.");
         }
 

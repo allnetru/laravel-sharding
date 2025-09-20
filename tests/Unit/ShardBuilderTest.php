@@ -4,11 +4,11 @@ namespace Allnetru\Sharding\Tests\Unit;
 
 use Allnetru\Sharding\Models\Concerns\Shardable;
 use Allnetru\Sharding\ShardingManager;
+use Allnetru\Sharding\Tests\TestCase;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
-use Allnetru\Sharding\Tests\TestCase;
 
 class ShardBuilderTest extends TestCase
 {
@@ -55,7 +55,7 @@ class ShardBuilderTest extends TestCase
         }
     }
 
-    public function testGetMergesResultsInOrder(): void
+    public function test_get_merges_results_in_order(): void
     {
         foreach ([1, 3, 5] as $id) {
             DB::connection('shard_1')->table('items')->insert(['id' => $id, 'value' => $id, 'is_replica' => false]);
@@ -72,7 +72,7 @@ class ShardBuilderTest extends TestCase
         $this->assertSame([1, 2, 3, 4, 5, 6], $values);
     }
 
-    public function testLimitAppliesGlobally(): void
+    public function test_limit_applies_globally(): void
     {
         foreach ([1, 3, 5] as $id) {
             DB::connection('shard_1')->table('items')->insert(['id' => $id, 'value' => $id, 'is_replica' => false]);
@@ -89,7 +89,7 @@ class ShardBuilderTest extends TestCase
         $this->assertSame([1, 2, 3], $values);
     }
 
-    public function testOffsetAndLimitApplyGlobally(): void
+    public function test_offset_and_limit_apply_globally(): void
     {
         foreach ([1, 3, 5] as $id) {
             DB::connection('shard_1')->table('items')->insert(['id' => $id, 'value' => $id, 'is_replica' => false]);
@@ -106,7 +106,7 @@ class ShardBuilderTest extends TestCase
         $this->assertSame([3, 4, 5], $values);
     }
 
-    public function testPaginateIsOrderedAndMemoryEfficient(): void
+    public function test_paginate_is_ordered_and_memory_efficient(): void
     {
         foreach (range(1, 1000) as $id) {
             DB::connection('shard_1')->table('items')->insert(['id' => $id, 'value' => $id, 'is_replica' => false]);
@@ -127,7 +127,7 @@ class ShardBuilderTest extends TestCase
         $this->assertLessThan(8 * 1024 * 1024, memory_get_peak_usage(true) - $baseline);
     }
 
-    public function testEagerLoadsRelationsAcrossShards(): void
+    public function test_eager_loads_relations_across_shards(): void
     {
         DB::connection('shard_1')->table('parents')->insert(['id' => 1, 'is_replica' => false]);
         DB::connection('shard_1')->table('children')->insert([

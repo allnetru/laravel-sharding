@@ -8,13 +8,14 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 /**
  * @template TRelatedModel of \Illuminate\Database\Eloquent\Model
  * @template TDeclaringModel of \Illuminate\Database\Eloquent\Model
+ *
  * @extends HasMany<TRelatedModel, TDeclaringModel>
  */
 class ShardHasMany extends HasMany
 {
     use ResolvesShard;
 
-    /** @inheritDoc */
+    /** {@inheritDoc} */
     public function addConstraints()
     {
         if (static::$constraints) {

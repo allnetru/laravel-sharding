@@ -3,8 +3,8 @@
 namespace Allnetru\Sharding\Tests\Unit;
 
 use Allnetru\Sharding\IdGenerator;
-use Illuminate\Foundation\Testing\RefreshDatabase;
 use Allnetru\Sharding\Tests\TestCase;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 
 class IdGeneratorTest extends TestCase
 {

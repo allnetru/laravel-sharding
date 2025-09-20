@@ -29,15 +29,12 @@ class Distribute extends Command
 
     /**
      * Execute the console command.
-     *
-     * @param  ShardingManager  $manager
-     * @return int
      */
     public function handle(ShardingManager $manager): int
     {
         $model = $this->resolveModel($this->argument('model'));
 
-        if (!$model) {
+        if (! $model) {
             return self::FAILURE;
         }
 
@@ -48,7 +45,7 @@ class Distribute extends Command
         foreach ($tables as $table) {
             $tableModel = $table === $model->getTable() ? $model : $this->resolveModelByTable($table);
 
-            if (!$tableModel) {
+            if (! $tableModel) {
                 return self::FAILURE;
             }
 
@@ -67,7 +64,7 @@ class Distribute extends Command
             $this->info("Processing {$table}...");
             $tableModel = $table === $model->getTable() ? $model : $this->resolveModelByTable($table);
 
-            if (!$tableModel) {
+            if (! $tableModel) {
                 return self::FAILURE;
             }
 
@@ -103,10 +100,6 @@ class Distribute extends Command
 
     /**
      * Determine if the given table has foreign key constraints.
-     *
-     * @param  string  $connection
-     * @param  string  $table
-     * @return bool
      */
     protected function hasForeignKeys(string $connection, string $table): bool
     {
@@ -117,51 +110,45 @@ class Distribute extends Command
             [$database, $table, $table]
         );
 
-        return !empty($foreign);
+        return ! empty($foreign);
     }
 
     /**
      * Resolve a model instance from the given class name.
-     *
-     * @param  string  $class
-     * @return Model|null
      */
     protected function resolveModel(string $class): ?Model
     {
         $modelClass = ltrim($class, '\\');
 
-        if (!class_exists($modelClass)) {
-            $fallback = app()->getNamespace() . 'Models\\' . $modelClass;
+        if (! class_exists($modelClass)) {
+            $fallback = app()->getNamespace().'Models\\'.$modelClass;
             if (class_exists($fallback)) {
                 $modelClass = $fallback;
             }
         }
 
-        if (!class_exists($modelClass) || !is_subclass_of($modelClass, Model::class)) {
+        if (! class_exists($modelClass) || ! is_subclass_of($modelClass, Model::class)) {
             $this->error("Model {$modelClass} not found.");
 
             return null;
         }
 
-        return new $modelClass();
+        return new $modelClass;
     }
 
     /**
      * Resolve a model instance by table name.
-     *
-     * @param  string  $table
-     * @return Model|null
      */
     protected function resolveModelByTable(string $table): ?Model
     {
-        $modelClass = app()->getNamespace() . 'Models\\' . Str::studly(Str::singular($table));
+        $modelClass = app()->getNamespace().'Models\\'.Str::studly(Str::singular($table));
 
-        if (!class_exists($modelClass) || !is_subclass_of($modelClass, Model::class)) {
+        if (! class_exists($modelClass) || ! is_subclass_of($modelClass, Model::class)) {
             $this->error("Model for table {$table} not found.");
 
             return null;
         }
 
-        return new $modelClass();
+        return new $modelClass;
     }
 }

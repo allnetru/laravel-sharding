@@ -9,13 +9,14 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
  * @template TRelatedModel of \Illuminate\Database\Eloquent\Model
  * @template TDeclaringModel of \Illuminate\Database\Eloquent\Model
  * @template TPivotModel of \Illuminate\Database\Eloquent\Relations\Pivot
+ *
  * @extends BelongsToMany<TRelatedModel, TDeclaringModel, TPivotModel>
  */
 class ShardBelongsToMany extends BelongsToMany
 {
     use ResolvesShard;
 
-    /** @inheritDoc */
+    /** {@inheritDoc} */
     public function addConstraints()
     {
         $this->switchConnection($this->parent->{$this->parentKey});

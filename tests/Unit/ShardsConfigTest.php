@@ -3,16 +3,16 @@
 namespace Allnetru\Sharding\Tests\Unit;
 
 use Allnetru\Sharding\Support\Config\Shards;
+use Allnetru\Sharding\Tests\TestCase;
 use Illuminate\Support\Facades\Log;
 use PHPUnit\Framework\Attributes\DataProvider;
-use Allnetru\Sharding\Tests\TestCase;
 
 class ShardsConfigTest extends TestCase
 {
     #[DataProvider('invalidDsnProvider')]
     public function test_invalid_dsn_is_excluded(string $dsn): void
     {
-        putenv('DB_SHARDS=' . $dsn);
+        putenv('DB_SHARDS='.$dsn);
         $_ENV['DB_SHARDS'] = $dsn;
         $_SERVER['DB_SHARDS'] = $dsn;
         Log::shouldReceive('warning')->twice()->with(sprintf('Invalid shard DSN: %s', $dsn));

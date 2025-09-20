@@ -8,13 +8,14 @@ use Illuminate\Database\Eloquent\Relations\MorphToMany;
 /**
  * @template TRelatedModel of \Illuminate\Database\Eloquent\Model
  * @template TDeclaringModel of \Illuminate\Database\Eloquent\Model
+ *
  * @extends MorphToMany<TRelatedModel, TDeclaringModel>
  */
 class ShardMorphToMany extends MorphToMany
 {
     use ResolvesShard;
 
-    /** @inheritDoc */
+    /** {@inheritDoc} */
     public function addConstraints()
     {
         $this->switchConnection($this->parent->{$this->parentKey});

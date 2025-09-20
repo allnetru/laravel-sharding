@@ -8,13 +8,14 @@ use Illuminate\Database\Eloquent\Relations\MorphOne;
 /**
  * @template TRelatedModel of \Illuminate\Database\Eloquent\Model
  * @template TDeclaringModel of \Illuminate\Database\Eloquent\Model
+ *
  * @extends MorphOne<TRelatedModel, TDeclaringModel>
  */
 class ShardMorphOne extends MorphOne
 {
     use ResolvesShard;
 
-    /** @inheritDoc */
+    /** {@inheritDoc} */
     public function addConstraints()
     {
         if (static::$constraints) {

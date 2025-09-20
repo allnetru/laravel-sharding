@@ -27,8 +27,6 @@ class Rebalance extends Command
 
     /**
      * Execute the console command.
-     *
-     * @return int
      */
     public function handle(): int
     {
@@ -47,14 +45,14 @@ class Rebalance extends Command
         $config['connections'] = $config['connections'] ?? (config('sharding.connections') ?? []);
         $config['table'] = $table;
 
-        if (!$strategy->canRebalance()) {
+        if (! $strategy->canRebalance()) {
             $this->error('Rebalancing is not supported for this strategy.');
 
             return self::FAILURE;
         }
 
         $model = $this->resolveModelByTable($table);
-        if (!$model) {
+        if (! $model) {
             return self::FAILURE;
         }
 
@@ -68,20 +66,17 @@ class Rebalance extends Command
 
     /**
      * Resolve a model instance by table name.
-     *
-     * @param  string  $table
-     * @return Model|null
      */
     protected function resolveModelByTable(string $table): ?Model
     {
-        $modelClass = app()->getNamespace() . 'Models\\' . Str::studly(Str::singular($table));
+        $modelClass = app()->getNamespace().'Models\\'.Str::studly(Str::singular($table));
 
-        if (!class_exists($modelClass) || !is_subclass_of($modelClass, Model::class)) {
+        if (! class_exists($modelClass) || ! is_subclass_of($modelClass, Model::class)) {
             $this->error("Model for table {$table} not found.");
 
             return null;
         }
 
-        return new $modelClass();
+        return new $modelClass;
     }
 }
