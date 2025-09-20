@@ -1,0 +1,35 @@
+<?php
+
+namespace Allnetru\Sharding\Tests\Unit;
+
+use Allnetru\Sharding\Support\Config\Shards;
+use Illuminate\Support\Facades\Log;
+use PHPUnit\Framework\Attributes\DataProvider;
+use Allnetru\Sharding\Tests\TestCase;
+
+class ShardsConfigTest extends TestCase
+{
+    #[DataProvider('invalidDsnProvider')]
+    public function test_invalid_dsn_is_excluded(string $dsn): void
+    {
+        putenv('DB_SHARDS=' . $dsn);
+        $_ENV['DB_SHARDS'] = $dsn;
+        $_SERVER['DB_SHARDS'] = $dsn;
+        Log::shouldReceive('warning')->twice()->with(sprintf('Invalid shard DSN: %s', $dsn));
+
+        $this->assertSame([], Shards::databaseConnections());
+        $this->assertSame([], Shards::weights());
+
+        putenv('DB_SHARDS');
+        unset($_ENV['DB_SHARDS'], $_SERVER['DB_SHARDS']);
+    }
+
+    public static function invalidDsnProvider(): array
+    {
+        return [
+            'missing name' => [':host:3306:db'],
+            'missing host' => ['shard::3306:db'],
+            'missing database' => ['shard:host:3306:'],
+        ];
+    }
+}
