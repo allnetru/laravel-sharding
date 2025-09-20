@@ -28,11 +28,13 @@ trait Shardable
     public array $replicaConnections = [];
 
     /**
+     * @return Builder
+     *
      * @throws InvalidArgumentException
      */
-    public function scopeWithoutReplicas(Builder $q): void
+    public function scopeWithoutReplicas(Builder $q): Builder
     {
-        $q->where($q->qualifyColumn('is_replica'), false);
+        return $q->where($q->qualifyColumn('is_replica'), false);
     }
 
     /**

@@ -19,7 +19,12 @@ class ShardMorphMany extends MorphMany
     public function addConstraints()
     {
         if (static::$constraints) {
-            $this->switchConnection($this->getParentKey());
+            $parentKey = $this->getParentKey();
+
+            if ($parentKey !== null) {
+                $this->switchConnection($parentKey);
+            }
+
             parent::addConstraints();
         }
     }
