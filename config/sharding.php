@@ -13,6 +13,27 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Environment configuration
+    |--------------------------------------------------------------------------
+    |
+    | Capture environment-driven values so they remain accessible after the
+    | config cache is generated. Runtime helpers pull values from this array
+    | instead of calling env() outside of this file.
+    */
+    'env' => [
+        'driver' => env('DB_SHARD_DRIVER', 'mysql'),
+        'username' => env('DB_USERNAME', 'forge'),
+        'password' => env('DB_PASSWORD', ''),
+        'charset' => env('DB_CHARSET', 'utf8mb4'),
+        'collation' => env('DB_COLLATION', 'utf8mb4_unicode_ci'),
+        'port' => env('DB_PORT', '3306'),
+        'mysql_attr_ssl_ca' => env('MYSQL_ATTR_SSL_CA'),
+        'db_shards' => env('DB_SHARDS', ''),
+        'db_shard_migrations' => env('DB_SHARD_MIGRATIONS', ''),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Strategy Registry
     |--------------------------------------------------------------------------
     |

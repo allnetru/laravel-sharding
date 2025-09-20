@@ -6,6 +6,12 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * Metadata model storing shard range assignments.
+ *
+ * @property string $table
+ * @property int $start
+ * @property int|null $end
+ * @property string $connection
+ * @property array<int, string>|null $replicas
  */
 class ShardRange extends Model
 {
