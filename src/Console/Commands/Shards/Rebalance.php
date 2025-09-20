@@ -69,7 +69,7 @@ class Rebalance extends Command
     /**
      * Resolve a model instance by table name.
      *
-     * @param  string  $table
+     * @param string $table
      * @return Model|null
      */
     protected function resolveModelByTable(string $table): ?Model

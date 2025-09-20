@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 /**
  * @template TRelatedModel of \Illuminate\Database\Eloquent\Model
  * @template TDeclaringModel of \Illuminate\Database\Eloquent\Model
+ *
  * @extends HasOne<TRelatedModel, TDeclaringModel>
  */
 class ShardHasOne extends HasOne
@@ -18,7 +19,12 @@ class ShardHasOne extends HasOne
     public function addConstraints()
     {
         if (static::$constraints) {
-            $this->switchConnection($this->getParentKey());
+            $parentKey = $this->getParentKey();
+
+            if ($parentKey !== null) {
+                $this->switchConnection($parentKey);
+            }
+
             parent::addConstraints();
         }
     }

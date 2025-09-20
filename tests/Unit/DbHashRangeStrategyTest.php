@@ -5,8 +5,8 @@ namespace Allnetru\Sharding\Tests\Unit;
 use Allnetru\Sharding\Models\ShardSlot;
 use Allnetru\Sharding\Strategies\DbHashRangeStrategy;
 use Allnetru\Sharding\Strategies\HashStrategy;
-use Illuminate\Support\Facades\DB;
 use Allnetru\Sharding\Tests\TestCase;
+use Illuminate\Support\Facades\DB;
 
 class DbHashRangeStrategyTest extends TestCase
 {

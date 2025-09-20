@@ -27,7 +27,7 @@ class Example extends Command
     /**
      * Execute the console command.
      *
-     * @param  ShardingManager  $manager
+     * @param ShardingManager $manager
      * @return int
      */
     public function handle(ShardingManager $manager): int

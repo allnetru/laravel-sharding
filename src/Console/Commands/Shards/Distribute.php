@@ -30,7 +30,7 @@ class Distribute extends Command
     /**
      * Execute the console command.
      *
-     * @param  ShardingManager  $manager
+     * @param ShardingManager $manager
      * @return int
      */
     public function handle(ShardingManager $manager): int
@@ -104,8 +104,8 @@ class Distribute extends Command
     /**
      * Determine if the given table has foreign key constraints.
      *
-     * @param  string  $connection
-     * @param  string  $table
+     * @param string $connection
+     * @param string $table
      * @return bool
      */
     protected function hasForeignKeys(string $connection, string $table): bool
@@ -123,7 +123,7 @@ class Distribute extends Command
     /**
      * Resolve a model instance from the given class name.
      *
-     * @param  string  $class
+     * @param string $class
      * @return Model|null
      */
     protected function resolveModel(string $class): ?Model
@@ -149,7 +149,7 @@ class Distribute extends Command
     /**
      * Resolve a model instance by table name.
      *
-     * @param  string  $table
+     * @param string $table
      * @return Model|null
      */
     protected function resolveModelByTable(string $table): ?Model

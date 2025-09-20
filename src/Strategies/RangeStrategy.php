@@ -7,15 +7,15 @@ use InvalidArgumentException;
 /**
  * Distributes records across shards using configured numeric ranges.
  */
-class RangeStrategy implements Strategy
+class RangeStrategy implements Strategy, SupportsAfterRebalance
 {
     use Rebalanceable;
 
     /**
      * Determine shard connections for a key based on configured ranges.
      *
-     * @param  mixed  $key
-     * @param  array  $config
+     * @param mixed $key
+     * @param array $config
      * @return array<int, string>
      */
     public function determine(mixed $key, array $config): array
@@ -70,16 +70,16 @@ class RangeStrategy implements Strategy
     /**
      * Update configuration ranges after rebalancing.
      *
-     * @param  string       $table
-     * @param  string       $key
-     * @param  string|null  $from
-     * @param  string|null  $to
-     * @param  int|null     $start
-     * @param  int|null     $end
-     * @param  array        $config
+     * @param string $table
+     * @param string $key
+     * @param string|null $from
+     * @param string|null $to
+     * @param int|null $start
+     * @param int|null $end
+     * @param array $config
      * @return void
      */
-    protected function afterRebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): void
+    public function afterRebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): void
     {
         if (!$to) {
             return;

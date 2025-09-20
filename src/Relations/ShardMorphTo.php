@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Relations\MorphTo;
 /**
  * @template TRelatedModel of \Illuminate\Database\Eloquent\Model
  * @template TDeclaringModel of \Illuminate\Database\Eloquent\Model
+ *
  * @extends MorphTo<TRelatedModel, TDeclaringModel>
  */
 class ShardMorphTo extends MorphTo

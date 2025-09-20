@@ -12,6 +12,6 @@ class SnowflakeStrategy implements Strategy
      */
     public function generate(array $config): int
     {
-        return (int) ((int) (microtime(true) * 1000) << 16) | random_int(0, 0xffff);
+        return (int) ((int) (microtime(true) * 1000) << 16) | random_int(0, 0xFFFF);
     }
 }

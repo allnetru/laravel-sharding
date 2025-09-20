@@ -8,8 +8,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 /**
  * @template TRelatedModel of \Illuminate\Database\Eloquent\Model
  * @template TDeclaringModel of \Illuminate\Database\Eloquent\Model
- * @template TPivotModel of \Illuminate\Database\Eloquent\Relations\Pivot
- * @extends BelongsToMany<TRelatedModel, TDeclaringModel, TPivotModel>
+ *
+ * @extends BelongsToMany<TRelatedModel, TDeclaringModel>
  */
 class ShardBelongsToMany extends BelongsToMany
 {

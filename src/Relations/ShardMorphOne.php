@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Relations\MorphOne;
 /**
  * @template TRelatedModel of \Illuminate\Database\Eloquent\Model
  * @template TDeclaringModel of \Illuminate\Database\Eloquent\Model
+ *
  * @extends MorphOne<TRelatedModel, TDeclaringModel>
  */
 class ShardMorphOne extends MorphOne
@@ -18,7 +19,12 @@ class ShardMorphOne extends MorphOne
     public function addConstraints()
     {
         if (static::$constraints) {
-            $this->switchConnection($this->getParentKey());
+            $parentKey = $this->getParentKey();
+
+            if ($parentKey !== null) {
+                $this->switchConnection($parentKey);
+            }
+
             parent::addConstraints();
         }
     }

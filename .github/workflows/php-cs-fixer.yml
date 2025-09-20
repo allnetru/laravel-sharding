@@ -1,0 +1,33 @@
+name: PHP CS Fixer
+
+on:
+  push:
+    paths:
+      - '**.php'
+      - '.php_cs.dist.php'
+      - '.github/workflows/php-cs-fixer.yml'
+  pull_request:
+    paths:
+      - '**.php'
+      - '.php_cs.dist.php'
+      - '.github/workflows/php-cs-fixer.yml'
+
+jobs:
+  php-cs-fixer:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+
+      - name: Install composer dependencies
+        uses: ramsey/composer-install@v3
+
+      - name: Run PHP CS Fixer
+        run: vendor/bin/php-cs-fixer fix --config=.php_cs.dist.php --allow-risky=yes --diff --dry-run

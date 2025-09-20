@@ -10,7 +10,7 @@ interface Strategy
     /**
      * Generate an identifier for given table.
      *
-     * @param  array<string, mixed>  $config
+     * @param array<string, mixed> $config
      * @return int
      */
     public function generate(array $config): int;

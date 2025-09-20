@@ -3,9 +3,9 @@
 namespace Allnetru\Sharding\Tests\Unit;
 
 use Allnetru\Sharding\Support\Config\Shards;
+use Allnetru\Sharding\Tests\TestCase;
 use Illuminate\Support\Facades\Log;
 use PHPUnit\Framework\Attributes\DataProvider;
-use Allnetru\Sharding\Tests\TestCase;
 
 class ShardsConfigTest extends TestCase
 {

@@ -20,6 +20,9 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 
+/**
+ * @method static Builder withoutReplicas()
+ */
 trait Shardable
 {
     /**
@@ -29,12 +32,13 @@ trait Shardable
 
     /**
      * @param Builder $q
-     * @return void
+     * @return Builder
+     *
      * @throws InvalidArgumentException
      */
-    public function scopeWithoutReplicas(Builder $q): void
+    public function scopeWithoutReplicas(Builder $q): Builder
     {
-        $q->where($q->qualifyColumn('is_replica'), false);
+        return $q->where($q->qualifyColumn('is_replica'), false);
     }
 
     /**
@@ -45,6 +49,7 @@ trait Shardable
     public static function bootShardable(): void
     {
         static::addGlobalScope('without_replicas', function (Builder $builder): void {
+            /** @var Builder<static>&ShardBuilder $builder */
             $builder->withoutReplicas();
         });
 
@@ -93,11 +98,12 @@ trait Shardable
     /**
      * Define an inverse one-to-one or many relation that resolves the parent's shard.
      *
-     * @param  class-string<Model>  $related
-     * @param  string|null  $foreignKey
-     * @param  string|null  $ownerKey
-     * @param  string|null  $relation
-     * @return ShardBelongsTo
+     * @param class-string<Model> $related
+     * @param string|null $foreignKey
+     * @param string|null $ownerKey
+     * @param string|null $relation
+     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo<Model, $this>
+     * @phpstan-return ShardBelongsTo<Model, $this>
      */
     public function belongsTo($related, $foreignKey = null, $ownerKey = null, $relation = null)
     {
@@ -233,7 +239,7 @@ trait Shardable
     /**
      * Create a new Eloquent query builder for the model.
      *
-     * @param  \Illuminate\Database\Query\Builder  $query
+     * @param \Illuminate\Database\Query\Builder $query
      * @return Builder
      */
     public function newEloquentBuilder($query): Builder

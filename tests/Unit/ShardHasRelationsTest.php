@@ -2,13 +2,13 @@
 
 namespace Allnetru\Sharding\Tests\Unit;
 
-use Allnetru\Sharding\Models\Concerns\Shardable;
 use Allnetru\Sharding\IdGenerator;
+use Allnetru\Sharding\Models\Concerns\Shardable;
 use Allnetru\Sharding\ShardingManager;
+use Allnetru\Sharding\Tests\TestCase;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
-use Allnetru\Sharding\Tests\TestCase;
 
 class ShardHasRelationsTest extends TestCase
 {
@@ -63,7 +63,7 @@ class ShardHasRelationsTest extends TestCase
         }
     }
 
-    public function testHasManyLoadsAcrossShards(): void
+    public function test_has_many_loads_across_shards(): void
     {
         config(['sharding.tables.organizations.connections' => ['shard_1' => ['weight' => 1]]]);
 
@@ -82,7 +82,7 @@ class ShardHasRelationsTest extends TestCase
         $this->assertSame('shard_2', $users->first()->getConnectionName());
     }
 
-    public function testHasOneLoadsAcrossShards(): void
+    public function test_has_one_loads_across_shards(): void
     {
         config(['sharding.tables.users.connections' => ['shard_1' => ['weight' => 1]]]);
 

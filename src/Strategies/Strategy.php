@@ -10,29 +10,27 @@ interface Strategy
     /**
      * Determine the shard connection names for the given key.
      *
-     * @param  mixed  $key
-     * @param  array  $config  strategy-specific configuration
-     * @return array<int, string>  [primary, replica1, ...]
+     * @param mixed $key
+     * @param array $config strategy-specific configuration
+     * @return array<int, string> [primary, replica1, ...]
      */
     public function determine(mixed $key, array $config): array;
 
     /**
      * Persist metadata about the primary shard for the given key.
      *
-     * @param  mixed   $key
-     * @param  string  $connection
-     * @param  array   $config
-     * @return void
+     * @param mixed $key
+     * @param array<int, string> $connections
+     * @param array $config
      */
     public function recordMeta(mixed $key, array $connections, array $config): void;
 
     /**
      * Persist metadata about a replica shard for the given key.
      *
-     * @param  mixed   $key
-     * @param  string  $connection
-     * @param  array   $config
-     * @return void
+     * @param mixed $key
+     * @param string $connection
+     * @param array $config
      */
     public function recordReplica(mixed $key, string $connection, array $config): void;
 
@@ -46,13 +44,13 @@ interface Strategy
     /**
      * Move records between shards.
      *
-     * @param  string       $table
-     * @param  string       $key
-     * @param  string|null  $from
-     * @param  string|null  $to
-     * @param  int|null     $start
-     * @param  int|null     $end
-     * @param  array        $config
+     * @param string $table
+     * @param string $key
+     * @param string|null $from
+     * @param string|null $to
+     * @param int|null $start
+     * @param int|null $end
+     * @param array $config
      * @return int number of moved records
      */
     public function rebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): int;

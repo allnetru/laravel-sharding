@@ -8,9 +8,16 @@ use Illuminate\Pagination\Paginator;
 
 /**
  * Eloquent builder that queries across multiple shard connections.
+ *
+ * @method ShardBuilder withoutReplicas()
  */
 class ShardBuilder extends EloquentBuilder
 {
+    /**
+     * Indicates whether the builder operates on a single shard connection.
+     */
+    protected bool $singleConnection = false;
+
     /**
      * @return array<string, array{weight:int}>
      */
@@ -22,16 +29,17 @@ class ShardBuilder extends EloquentBuilder
     /**
      * Create a replica builder for the specified connection.
      *
-     * @param  string  $connection
-     * @return EloquentBuilder
+     * @param string $connection
+     * @return self
      */
-    protected function replicateForConnection(string $connection): EloquentBuilder
+    protected function replicateForConnection(string $connection): self
     {
         $model = $this->getModel()->newInstance([], true)->setConnection($connection);
         $query = clone $this->getQuery();
         $query->connection = $model->getConnection();
-        $builder = new EloquentBuilder($query);
+        $builder = new self($query);
         $builder->setModel($model);
+        $builder->singleConnection = true;
         $builder->withoutReplicas();
         $builder->setEagerLoads($this->getEagerLoads());
 
@@ -43,6 +51,10 @@ class ShardBuilder extends EloquentBuilder
      */
     public function get($columns = ['*'])
     {
+        if ($this->singleConnection) {
+            return parent::get($columns);
+        }
+
         $limit = $this->getQuery()->limit;
         $offset = $this->getQuery()->offset;
 
@@ -94,10 +106,10 @@ class ShardBuilder extends EloquentBuilder
     /**
      * Retrieve models with a global limit and offset across shards.
      *
-     * @param  int|null  $limit
-     * @param  int|null  $offset
-     * @param  array  $columns
-     * @return \Illuminate\Support\Collection
+     * @param int|null $limit
+     * @param int|null $offset
+     * @param array<int, string> $columns
+     * @return \Illuminate\Database\Eloquent\Collection<int, \Illuminate\Database\Eloquent\Model>
      */
     protected function getWithLimitAndOffset(?int $limit, ?int $offset, array $columns)
     {
@@ -105,8 +117,9 @@ class ShardBuilder extends EloquentBuilder
         $current = [];
 
         foreach ($this->connections() as $name => $config) {
-            $builder = $this->replicateForConnection($name);
-            $iterator = $builder->cursor($columns)->getIterator();
+            $builder = $this->replicateForConnection($name)->select($columns);
+            /** @var \Generator<int, \Illuminate\Database\Eloquent\Model> $iterator */
+            $iterator = $builder->cursor()->getIterator();
             $iterator->rewind();
 
             if ($iterator->valid()) {
@@ -156,6 +169,10 @@ class ShardBuilder extends EloquentBuilder
      */
     public function chunk($count, callable $callback)
     {
+        if ($this->singleConnection) {
+            return parent::chunk($count, $callback);
+        }
+
         foreach ($this->connections() as $name => $config) {
             $builder = $this->replicateForConnection($name);
             $builder->chunk($count, $callback);
@@ -169,6 +186,10 @@ class ShardBuilder extends EloquentBuilder
      */
     public function chunkById($count, callable $callback, $column = null, $alias = null)
     {
+        if ($this->singleConnection) {
+            return parent::chunkById($count, $callback, $column, $alias);
+        }
+
         foreach ($this->connections() as $name => $config) {
             $builder = $this->replicateForConnection($name);
             $builder->chunkById($count, $callback, $column, $alias);
@@ -182,6 +203,10 @@ class ShardBuilder extends EloquentBuilder
      */
     public function paginate($perPage = null, $columns = ['*'], $pageName = 'page', $page = null, $total = null)
     {
+        if ($this->singleConnection) {
+            return parent::paginate($perPage, $columns, $pageName, $page, $total);
+        }
+
         $page = $page ?: Paginator::resolveCurrentPage($pageName);
         $perPage = $perPage ?: $this->getModel()->getPerPage();
 
@@ -192,6 +217,7 @@ class ShardBuilder extends EloquentBuilder
         foreach ($this->connections() as $name => $config) {
             $builder = $this->replicateForConnection($name);
             $total += $builder->count();
+            /** @var \Generator<int, \Illuminate\Database\Eloquent\Model> $iterator */
             $iterator = $builder->cursor()->getIterator();
             $iterator->rewind();
 
@@ -270,7 +296,7 @@ class ShardBuilder extends EloquentBuilder
     /**
      * Find the first model across all shard connections.
      *
-     * @param  array  $attributes
+     * @param array<string, mixed> $attributes
      * @return \Illuminate\Database\Eloquent\Model|null
      */
     protected function firstAcrossConnections(array $attributes)
@@ -289,9 +315,8 @@ class ShardBuilder extends EloquentBuilder
     /**
      * Compare two models based on the builder's order clauses.
      *
-     * @param  \Illuminate\Database\Eloquent\Model  $a
-     * @param  \Illuminate\Database\Eloquent\Model  $b
-     * @return int
+     * @param \Illuminate\Database\Eloquent\Model $a
+     * @param \Illuminate\Database\Eloquent\Model $b
      */
     protected function compareModels($a, $b): int
     {
