@@ -53,7 +53,7 @@ class ShardableTest extends TestCase
         }
     }
 
-    public function test_get_connection_name_assigns_id_and_connections(): void
+    public function testGetConnectionNameAssignsIdAndConnections(): void
     {
         $item = new ShardableItem(['value' => 1]);
 
@@ -69,7 +69,7 @@ class ShardableTest extends TestCase
         $this->assertSame(array_slice($expected, 1), $item->replicaConnections);
     }
 
-    public function test_saving_distributes_data_across_shards(): void
+    public function testSavingDistributesDataAcrossShards(): void
     {
         $manager = app(ShardingManager::class);
         $counts = ['shard_1' => 0, 'shard_2' => 0];
@@ -92,7 +92,7 @@ class ShardableTest extends TestCase
         $this->assertLessThanOrEqual(6, abs($counts['shard_1'] - $counts['shard_2']));
     }
 
-    public function test_replicas_are_saved_and_marked(): void
+    public function testReplicasAreSavedAndMarked(): void
     {
         config()->set('sharding.replica_count', 1);
         app()->instance(ShardingManager::class, new ShardingManager(config('sharding')));

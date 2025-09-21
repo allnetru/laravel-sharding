@@ -57,7 +57,7 @@ class ShardBelongsToRelationTest extends TestCase
         }
     }
 
-    public function test_belongs_to_loads_across_shards(): void
+    public function testBelongsToLoadsAcrossShards(): void
     {
         $organization = new TestOrganization(['id' => 1]);
         $organization->save();
@@ -73,7 +73,7 @@ class ShardBelongsToRelationTest extends TestCase
         );
     }
 
-    public function test_belongs_to_returns_null_when_foreign_key_is_missing(): void
+    public function testBelongsToReturnsNullWhenForeignKeyIsMissing(): void
     {
         $user = new TestUser(['id' => 5, 'organization_id' => null]);
         $user->save();

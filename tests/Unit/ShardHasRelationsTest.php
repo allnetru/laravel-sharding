@@ -63,7 +63,7 @@ class ShardHasRelationsTest extends TestCase
         }
     }
 
-    public function test_has_many_loads_across_shards(): void
+    public function testHasManyLoadsAcrossShards(): void
     {
         config(['sharding.tables.organizations.connections' => ['shard_1' => ['weight' => 1]]]);
 
@@ -82,7 +82,7 @@ class ShardHasRelationsTest extends TestCase
         $this->assertSame('shard_2', $users->first()->getConnectionName());
     }
 
-    public function test_has_one_loads_across_shards(): void
+    public function testHasOneLoadsAcrossShards(): void
     {
         config(['sharding.tables.users.connections' => ['shard_1' => ['weight' => 1]]]);
 

@@ -7,7 +7,7 @@ use Allnetru\Sharding\Tests\TestCase;
 
 class HashStrategyTest extends TestCase
 {
-    public function test_large_key_distribution(): void
+    public function testLargeKeyDistribution(): void
     {
         $strategy = new HashStrategy();
 

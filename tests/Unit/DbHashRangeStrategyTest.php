@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\DB;
 
 class DbHashRangeStrategyTest extends TestCase
 {
-    public function test_large_key_distribution(): void
+    public function testLargeKeyDistribution(): void
     {
         $config = [
             'slot_size' => 1000,
