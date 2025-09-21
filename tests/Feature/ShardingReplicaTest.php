@@ -7,7 +7,7 @@ use Allnetru\Sharding\Tests\TestCase;
 
 class ShardingReplicaTest extends TestCase
 {
-    public function test_replica_count_produces_expected_connections(): void
+    public function testReplicaCountProducesExpectedConnections(): void
     {
         config()->set('sharding', [
             'default' => 'hash',

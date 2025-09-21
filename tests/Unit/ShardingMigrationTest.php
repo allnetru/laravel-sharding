@@ -8,7 +8,7 @@ use Allnetru\Sharding\Tests\TestCase;
 
 class ShardingMigrationTest extends TestCase
 {
-    public function test_shard_marked_for_migration_is_skipped(): void
+    public function testShardMarkedForMigrationIsSkipped(): void
     {
         $config = [
             'default' => 'hash',

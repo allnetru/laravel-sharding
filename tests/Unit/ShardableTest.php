@@ -4,6 +4,8 @@ namespace Allnetru\Sharding\Tests\Unit;
 
 use Allnetru\Sharding\IdGenerator;
 use Allnetru\Sharding\Models\Concerns\Shardable;
+use Allnetru\Sharding\Relations\ShardBelongsTo;
+use Allnetru\Sharding\ShardBuilder;
 use Allnetru\Sharding\ShardingManager;
 use Allnetru\Sharding\Tests\TestCase;
 use Illuminate\Database\Eloquent\Model;
@@ -13,6 +15,8 @@ use Illuminate\Support\Facades\Schema;
 
 class ShardableTest extends TestCase
 {
+    private CountingGenerator $generator;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -35,14 +39,8 @@ class ShardableTest extends TestCase
         ]);
 
         app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
-        app()->singleton(IdGenerator::class, fn () => new class() {
-            private int $id = 0;
-
-            public function generate($model): int
-            {
-                return ++$this->id;
-            }
-        });
+        $this->generator = new CountingGenerator();
+        app()->instance(IdGenerator::class, $this->generator);
 
         foreach (['shard_1', 'shard_2'] as $connection) {
             Schema::connection($connection)->create('items', function (Blueprint $table): void {
@@ -50,10 +48,15 @@ class ShardableTest extends TestCase
                 $table->integer('value');
                 $table->boolean('is_replica')->default(false);
             });
+
+            Schema::connection($connection)->create('organizations', function (Blueprint $table): void {
+                $table->unsignedBigInteger('id')->primary();
+                $table->boolean('is_replica')->default(false);
+            });
         }
     }
 
-    public function test_get_connection_name_assigns_id_and_connections(): void
+    public function testGetConnectionNameAssignsIdAndConnections(): void
     {
         $item = new ShardableItem(['value' => 1]);
 
@@ -67,9 +70,10 @@ class ShardableTest extends TestCase
         $this->assertSame($expected[0], $connection);
         $this->assertSame($expected[0], $item->getConnectionName());
         $this->assertSame(array_slice($expected, 1), $item->replicaConnections);
+        $this->assertSame(1, $this->generator->calls);
     }
 
-    public function test_saving_distributes_data_across_shards(): void
+    public function testSavingDistributesDataAcrossShards(): void
     {
         $manager = app(ShardingManager::class);
         $counts = ['shard_1' => 0, 'shard_2' => 0];
@@ -92,7 +96,7 @@ class ShardableTest extends TestCase
         $this->assertLessThanOrEqual(6, abs($counts['shard_1'] - $counts['shard_2']));
     }
 
-    public function test_replicas_are_saved_and_marked(): void
+    public function testReplicasAreSavedAndMarked(): void
     {
         config()->set('sharding.replica_count', 1);
         app()->instance(ShardingManager::class, new ShardingManager(config('sharding')));
@@ -106,6 +110,53 @@ class ShardableTest extends TestCase
 
         $this->assertDatabaseHas('items', ['id' => $item->id, 'is_replica' => false], $primary);
         $this->assertDatabaseHas('items', ['id' => $item->id, 'is_replica' => true], $replica);
+    }
+
+    public function testScopeWithoutReplicasFiltersResults(): void
+    {
+        DB::connection('shard_1')->table('items')->insert([
+            ['id' => 1, 'value' => 10, 'is_replica' => false],
+            ['id' => 2, 'value' => 11, 'is_replica' => true],
+        ]);
+
+        $results = ShardableItem::withoutReplicas()->get()->pluck('id')->all();
+
+        $this->assertSame([1], $results);
+    }
+
+    public function testReplicaCreationDoesNotTriggerGenerator(): void
+    {
+        $item = new ShardableItem(['id' => 100, 'value' => 5, 'is_replica' => true]);
+        $item->save();
+
+        $this->assertSame(0, $this->generator->calls);
+        $this->assertTrue($item->is_replica);
+        $this->assertSame([], $item->replicaConnections);
+    }
+
+    public function testGetShardKeyRespectsCustomProperty(): void
+    {
+        $model = new CustomShardKeyModel(['tenant_id' => 5]);
+
+        $this->assertSame('tenant_id', $model->getShardKey());
+    }
+
+    public function testBelongsToReturnsShardBelongsToRelation(): void
+    {
+        $organization = new ShardableTestOrganization(['id' => 5]);
+        $organization->save();
+
+        $user = new ShardableTestUser(['value' => 1]);
+        $relation = $user->belongsTo(ShardableTestOrganization::class);
+
+        $this->assertInstanceOf(ShardBelongsTo::class, $relation);
+    }
+
+    public function testNewEloquentBuilderReturnsShardBuilder(): void
+    {
+        $builder = (new ShardableItem())->newQuery();
+
+        $this->assertInstanceOf(ShardBuilder::class, $builder);
     }
 }
 
@@ -122,4 +173,65 @@ class ShardableItem extends Model
     protected $casts = [
         'is_replica' => 'bool',
     ];
+}
+
+class CustomShardKeyModel extends Model
+{
+    use Shardable;
+
+    protected $table = 'items';
+
+    protected string $shardKey = 'tenant_id';
+
+    public $timestamps = false;
+
+    protected $guarded = [];
+
+    protected $casts = [
+        'is_replica' => 'bool',
+    ];
+}
+
+class ShardableTestOrganization extends Model
+{
+    use Shardable;
+
+    protected $table = 'organizations';
+
+    public $timestamps = false;
+
+    protected $guarded = [];
+
+    protected $casts = [
+        'is_replica' => 'bool',
+    ];
+}
+
+class ShardableTestUser extends Model
+{
+    use Shardable;
+
+    protected $table = 'items';
+
+    public $timestamps = false;
+
+    protected $guarded = [];
+
+    protected $casts = [
+        'is_replica' => 'bool',
+    ];
+}
+
+class CountingGenerator
+{
+    public int $calls = 0;
+
+    private int $id = 0;
+
+    public function generate($model): int
+    {
+        $this->calls++;
+
+        return ++$this->id;
+    }
 }
