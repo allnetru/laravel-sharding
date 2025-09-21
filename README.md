@@ -212,6 +212,39 @@ $partners = Organization::where('status', OrganizationStatus::partner)
 
 Insertions also resolve the target shard automatically. If you omit the primary key the configured ID generator assigns one before the record is saved.
 
+### Running under Swoole
+
+When the PHP process is executed inside a Swoole coroutine context (for example,
+Laravel Octane with the Swoole engine), shard fan-out queries are dispatched
+concurrently. The package detects the coroutine runtime automatically and uses
+channels to aggregate results without blocking on each individual shard. When a
+request is not already inside a coroutine, the dispatcher boots a
+`Swoole\Coroutine::run()` scheduler so the queries still run in parallel. No
+additional configuration is required.
+
+#### Custom coroutine drivers
+
+The default behaviour can be overridden from `config/sharding.php`. The
+`coroutines` section accepts any class or closure that returns an implementation
+of `Allnetru\Sharding\Support\Coroutine\CoroutineDriver`, allowing you to disable
+coroutines entirely or integrate with an alternative runtime:
+
+```php
+'coroutines' => [
+    'default' => env('SHARDING_COROUTINE_DRIVER', 'swoole'),
+    'drivers' => [
+        'swoole' => Allnetru\Sharding\Support\Coroutine\Drivers\SwooleCoroutineDriver::class,
+        'sync' => Allnetru\Sharding\Support\Coroutine\Drivers\SyncCoroutineDriver::class,
+        'amphp' => App\Sharding\AmpCoroutineDriver::class,
+    ],
+],
+```
+
+Point the `default` driver to `sync` (or set `SHARDING_COROUTINE_DRIVER=sync`) to
+keep fan-out queries synchronous. Custom drivers may be resolved through the
+Laravel container, so you can bind them as singletons or expose factory closures
+for more advanced scenarios.
+
 ### Console tooling
 
 Use the bundled Artisan commands to inspect and maintain shards:

@@ -1,0 +1,40 @@
+<?php
+
+namespace Allnetru\Sharding\Tests\Stubs;
+
+use Allnetru\Sharding\Support\Coroutine\CoroutineChannel;
+
+/**
+ * In-memory channel implementation for exercising coroutine code paths.
+ */
+final class FakeCoroutineChannel implements CoroutineChannel
+{
+    /**
+     * @param list<mixed> $buffer
+     */
+    public function __construct(private array $buffer = [])
+    {
+    }
+
+    /**
+     * @inheritDoc
+     */
+    public function push(mixed $value): bool
+    {
+        $this->buffer[] = $value;
+
+        return true;
+    }
+
+    /**
+     * @inheritDoc
+     */
+    public function pop(): mixed
+    {
+        if ($this->buffer === []) {
+            return false;
+        }
+
+        return array_shift($this->buffer);
+    }
+}

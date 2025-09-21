@@ -147,6 +147,39 @@ $partners = Organization::where('status', OrganizationStatus::partner)
 
 These calls transparently span all shards defined for the target table.
 
+### Coroutine execution with Swoole
+
+When the application runs within a Swoole coroutine runtime, read queries that
+fan out across multiple shards are executed concurrently. Laravel Octane with
+the Swoole engine automatically enables this behaviour. The package aggregates
+the results through coroutine channels so the request waits only for the
+slowest shard. When code executes outside an existing coroutine, the dispatcher
+boots a lightweight coroutine scheduler so queries still complete in
+parallel.
+
+#### Custom coroutine drivers
+
+You may override the coroutine driver through the `coroutines` section in
+`config/sharding.php`. Any class or closure that produces an implementation of
+`Allnetru\Sharding\Support\Coroutine\CoroutineDriver` may be registered, letting
+you disable concurrency entirely or plug in a different runtime:
+
+```php
+'coroutines' => [
+    'default' => env('SHARDING_COROUTINE_DRIVER', 'swoole'),
+    'drivers' => [
+        'swoole' => Allnetru\Sharding\Support\Coroutine\Drivers\SwooleCoroutineDriver::class,
+        'sync' => Allnetru\Sharding\Support\Coroutine\Drivers\SyncCoroutineDriver::class,
+        'amphp' => App\Sharding\AmpCoroutineDriver::class,
+    ],
+],
+```
+
+Setting the default driver (or `SHARDING_COROUTINE_DRIVER` environment variable)
+to `sync` keeps fan-out reads synchronous. Custom drivers may be resolved
+through Laravel's service container, enabling you to bind stateful instances or
+closures that depend on other services.
+
 ## Creating records
 
 Models also handle inserts across shards. When a `Shardable` model is created
