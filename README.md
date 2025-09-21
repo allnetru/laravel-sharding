@@ -1,5 +1,8 @@
 # Laravel Sharding
 
+[![Packagist Version](https://img.shields.io/packagist/v/allnetru/laravel-sharding.svg)](https://packagist.org/packages/allnetru/laravel-sharding)
+[![Tests](https://github.com/allnetru/laravel-sharding/actions/workflows/run-tests.yml/badge.svg?branch=main)](https://github.com/allnetru/laravel-sharding/actions/workflows/run-tests.yml)
+
 Laravel Sharding is a toolkit for distributing data across multiple databases while keeping a familiar Eloquent workflow. The package powers production applications and provides pluggable strategies so each table can select the most appropriate sharding approach.
 
 ## Requirements
