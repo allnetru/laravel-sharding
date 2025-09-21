@@ -40,8 +40,8 @@ A minimal example stitches these pieces together:
 
 ```dotenv
 # .env
-DB_SHARDS="users_eu:10.0.0.10:3306:users_eu;users_us:10.0.0.11:3306:users_us;users_backup:10.0.0.12:3306:users_backup"
-DB_SHARD_MIGRATIONS="users_legacy;users_backup"
+DB_SHARDS="shard-1:10.0.0.10:3306:app_shard_1;shard-2:10.0.0.11:3306:app_shard_2;shard-archive:10.0.0.12:3306:app_archive"
+DB_SHARD_MIGRATIONS="shard-legacy;shard-archive"
 ```
 
 ```php
@@ -60,9 +60,9 @@ return [
     ],
 
     'connections' => [
-        'users_eu' => ['weight' => 2],
-        'users_us' => ['weight' => 1],
-        // 'users_backup' => ['weight' => 1, 'replica' => true],
+        'shard-1' => ['weight' => 2],
+        'shard-2' => ['weight' => 1],
+        // 'shard-archive' => ['weight' => 1, 'replica' => true],
     ],
 
     'replica_count' => 1,
@@ -79,8 +79,8 @@ return [
             'strategy' => 'db_hash_range',
             'slot_size' => 250_000,
             'connections' => [
-                'users_eu' => ['weight' => 2],
-                'users_us' => ['weight' => 1],
+                'shard-1' => ['weight' => 2],
+                'shard-2' => ['weight' => 1],
             ],
             'meta_connection' => 'mysql',
             'group' => 'user_data',
@@ -95,8 +95,8 @@ return [
         'orders' => [
             'strategy' => 'db_range',
             'connections' => [
-                'users_eu' => ['weight' => 2],
-                'users_us' => ['weight' => 1],
+                'shard-1' => ['weight' => 2],
+                'shard-2' => ['weight' => 1],
             ],
             'range_size' => 50_000,
             'meta_connection' => 'mysql',
@@ -106,8 +106,8 @@ return [
         // 'payments' => [
         //     'strategy' => 'range',
         //     'ranges' => [
-        //         ['start' => 1, 'end' => 1_000_000, 'connection' => 'users_eu'],
-        //         ['start' => 1_000_001, 'end' => null, 'connection' => 'users_us'],
+        //         ['start' => 1, 'end' => 1_000_000, 'connection' => 'shard-1'],
+        //         ['start' => 1_000_001, 'end' => null, 'connection' => 'shard-2'],
         //     ],
         // ],
     ],
