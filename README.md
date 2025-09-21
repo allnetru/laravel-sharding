@@ -153,11 +153,17 @@ return [
         ],
 
         // other non-sharded connections...
-    ], Shards::databaseConnections()),
+    ], Shards::databaseConnections(env('DB_SHARDS', ''))),
 
     // ...
 ];
 ```
+
+> **Note**
+> Passing the `DB_SHARDS` string ensures shard definitions are available while
+> configuration files are still being evaluated. In other contexts you may call
+> `Shards::databaseConnections()` without arguments and it will read the
+> `DB_SHARDS` environment variable directly.
 
 A full walkthrough is available in [docs/en/sharding.md](docs/en/sharding.md).
 
