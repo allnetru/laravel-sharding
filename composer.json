@@ -51,8 +51,9 @@
     },
     "scripts": {
         "test": "vendor/bin/phpunit",
+        "test-coverage": "XDEBUG_MODE=coverage vendor/bin/phpunit --coverage-text",
         "analyse": "vendor/bin/phpstan analyse",
-        "test-coverage": "vendor/bin/phpunit --coverage-text",
+        "lint": "vendor/bin/php-cs-fixer fix --dry-run --diff --config=.php_cs.dist.php",
         "baseline": "vendor/bin/phpstan --generate-baseline"
     },
     "config": {
