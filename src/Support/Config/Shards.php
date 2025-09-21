@@ -11,14 +11,23 @@ use PDO;
 class Shards
 {
     /**
+     * Access environment variables while silencing Larastan's config-only check.
+     */
+    protected static function env(string $key, mixed $default = null): mixed
+    {
+        // @phpstan-ignore-next-line larastan.noEnvCallsOutsideOfConfig
+        return env($key, $default);
+    }
+
+    /**
      * Base configuration applied to all shard connections.
      *
      * @return array<string, mixed>
      */
     protected static function baseConfig(): array
     {
+        $sslCa = self::env('MYSQL_ATTR_SSL_CA');
         $options = [];
-        $sslCa = config('sharding.env.mysql_attr_ssl_ca');
 
         if (extension_loaded('pdo_mysql')) {
             $options = array_filter([
@@ -27,11 +36,11 @@ class Shards
         }
 
         return [
-            'driver' => (string) config('sharding.env.driver', 'mysql'),
-            'username' => (string) config('sharding.env.username', 'forge'),
-            'password' => (string) config('sharding.env.password', ''),
-            'charset' => (string) config('sharding.env.charset', 'utf8mb4'),
-            'collation' => (string) config('sharding.env.collation', 'utf8mb4_unicode_ci'),
+            'driver' => (string) self::env('DB_SHARD_DRIVER', 'mysql'),
+            'username' => (string) self::env('DB_USERNAME', 'forge'),
+            'password' => (string) self::env('DB_PASSWORD', ''),
+            'charset' => (string) self::env('DB_CHARSET', 'utf8mb4'),
+            'collation' => (string) self::env('DB_COLLATION', 'utf8mb4_unicode_ci'),
             'prefix' => '',
             'prefix_indexes' => true,
             'strict' => true,
@@ -63,8 +72,9 @@ class Shards
     public static function databaseConnections(?string $definitions = null): array
     {
         $baseConfig = self::baseConfig();
-        $definitions ??= (string) config('sharding.env.db_shards', '');
-        $defaultPort = (string) config('sharding.env.port', '3306');
+        $definitions ??= self::env('DB_SHARDS');
+        $definitions = (string) $definitions;
+        $defaultPort = (string) self::env('DB_PORT', '3306');
 
         return collect(explode(';', $definitions))
             ->filter()
@@ -96,7 +106,8 @@ class Shards
      */
     public static function weights(?string $definitions = null): array
     {
-        $definitions ??= (string) config('sharding.env.db_shards', '');
+        $definitions ??= self::env('DB_SHARDS');
+        $definitions = (string) $definitions;
 
         return collect(explode(';', $definitions))
             ->filter()
@@ -122,7 +133,8 @@ class Shards
      */
     public static function migrations(?string $definitions = null): array
     {
-        $definitions ??= (string) config('sharding.env.db_shard_migrations', '');
+        $definitions ??= self::env('DB_SHARD_MIGRATIONS');
+        $definitions = (string) $definitions;
 
         /** @var array<string, true> $migrations */
         $migrations = collect(explode(';', $definitions))
