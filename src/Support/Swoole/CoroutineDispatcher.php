@@ -15,6 +15,8 @@ final class CoroutineDispatcher
 
     /**
      * Determine whether the runtime is currently inside a Swoole coroutine.
+     *
+     * @return bool
      */
     public static function inCoroutine(): bool
     {
@@ -75,6 +77,8 @@ final class CoroutineDispatcher
      * Swap the coroutine driver. Primarily used for testing.
      *
      * Set to null to reload the configured driver on the next call.
+     *
+     * @param CoroutineDriver|null $driver
      */
     public static function useDriver(?CoroutineDriver $driver): void
     {
@@ -83,6 +87,8 @@ final class CoroutineDispatcher
 
     /**
      * Resolve the coroutine driver instance in use by the dispatcher.
+     *
+     * @return CoroutineDriver
      */
     private static function driver(): CoroutineDriver
     {
@@ -103,6 +109,8 @@ final class CoroutineDispatcher
      * The configuration array supports a `default` or `driver` key specifying the
      * name of the driver together with a `drivers` map containing the concrete
      * definitions. Each definition may be an instance, class-string or closure.
+     *
+     * @return CoroutineDriver|null
      */
     private static function configuredDriver(): ?CoroutineDriver
     {
@@ -150,6 +158,7 @@ final class CoroutineDispatcher
      * Turn a configuration definition into an executable coroutine driver.
      *
      * @param mixed $definition
+     * @return CoroutineDriver|null
      */
     private static function resolveConfiguredDriver(mixed $definition): ?CoroutineDriver
     {

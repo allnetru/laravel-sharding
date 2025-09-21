@@ -9,6 +9,8 @@ final class SwooleCoroutineChannel implements CoroutineChannel
 {
     /**
      * Create a new channel wrapper instance.
+     *
+     * @param \Swoole\Coroutine\Channel $channel
      */
     public function __construct(private \Swoole\Coroutine\Channel $channel)
     {
