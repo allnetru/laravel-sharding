@@ -81,6 +81,9 @@ final class CoroutineDispatcher
         self::$driver = $driver;
     }
 
+    /**
+     * Resolve the coroutine driver instance in use by the dispatcher.
+     */
     private static function driver(): CoroutineDriver
     {
         if (self::$driver instanceof CoroutineDriver) {
@@ -94,6 +97,13 @@ final class CoroutineDispatcher
         return self::$driver = new SwooleCoroutineDriver();
     }
 
+    /**
+     * Load the coroutine driver configured by the application, if any.
+     *
+     * The configuration array supports a `default` or `driver` key specifying the
+     * name of the driver together with a `drivers` map containing the concrete
+     * definitions. Each definition may be an instance, class-string or closure.
+     */
     private static function configuredDriver(): ?CoroutineDriver
     {
         $container = class_exists(IlluminateContainer::class)
@@ -136,6 +146,11 @@ final class CoroutineDispatcher
         return self::resolveConfiguredDriver($registry[$name]);
     }
 
+    /**
+     * Turn a configuration definition into an executable coroutine driver.
+     *
+     * @param mixed $definition
+     */
     private static function resolveConfiguredDriver(mixed $definition): ?CoroutineDriver
     {
         if ($definition instanceof CoroutineDriver) {
