@@ -23,8 +23,8 @@ Run the local quality checks before submitting changes:
 
 ```bash
 composer test
-vendor/bin/phpstan analyse
-vendor/bin/php-cs-fixer fix --dry-run --diff
+composer analyse
+composer lint
 ```
 
 ## QA and Release
