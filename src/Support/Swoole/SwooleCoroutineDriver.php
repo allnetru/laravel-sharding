@@ -4,8 +4,14 @@ namespace Allnetru\Sharding\Support\Swoole;
 
 use Closure;
 
+/**
+ * Concrete coroutine driver backed by the Swoole extension.
+ */
 final class SwooleCoroutineDriver implements CoroutineDriver
 {
+    /**
+     * @inheritDoc
+     */
     public function isSupported(): bool
     {
         return extension_loaded('swoole')
@@ -13,6 +19,9 @@ final class SwooleCoroutineDriver implements CoroutineDriver
             && class_exists(\Swoole\Coroutine\Channel::class);
     }
 
+    /**
+     * @inheritDoc
+     */
     public function inCoroutine(): bool
     {
         if (!$this->isSupported()) {
@@ -22,11 +31,17 @@ final class SwooleCoroutineDriver implements CoroutineDriver
         return \Swoole\Coroutine::getCid() > 0;
     }
 
+    /**
+     * @inheritDoc
+     */
     public function create(Closure $task): void
     {
         \Swoole\Coroutine::create($task);
     }
 
+    /**
+     * @inheritDoc
+     */
     public function run(Closure $callback): bool
     {
         if (!$this->isSupported() || !method_exists(\Swoole\Coroutine::class, 'run')) {
@@ -38,6 +53,9 @@ final class SwooleCoroutineDriver implements CoroutineDriver
         return true;
     }
 
+    /**
+     * @inheritDoc
+     */
     public function makeChannel(int $capacity): CoroutineChannel
     {
         return new SwooleCoroutineChannel(new \Swoole\Coroutine\Channel($capacity));

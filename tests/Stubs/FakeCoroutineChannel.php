@@ -4,6 +4,9 @@ namespace Allnetru\Sharding\Tests\Stubs;
 
 use Allnetru\Sharding\Support\Swoole\CoroutineChannel;
 
+/**
+ * In-memory channel implementation for exercising coroutine code paths.
+ */
 final class FakeCoroutineChannel implements CoroutineChannel
 {
     /**
@@ -13,6 +16,9 @@ final class FakeCoroutineChannel implements CoroutineChannel
     {
     }
 
+    /**
+     * @inheritDoc
+     */
     public function push(mixed $value): bool
     {
         $this->buffer[] = $value;
@@ -20,6 +26,9 @@ final class FakeCoroutineChannel implements CoroutineChannel
         return true;
     }
 
+    /**
+     * @inheritDoc
+     */
     public function pop(): mixed
     {
         if ($this->buffer === []) {

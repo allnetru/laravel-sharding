@@ -7,8 +7,14 @@ use Allnetru\Sharding\Tests\Stubs\FakeCoroutineDriver;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
+/**
+ * @covers \Allnetru\Sharding\Support\Swoole\CoroutineDispatcher
+ */
 class CoroutineDispatcherTest extends TestCase
 {
+    /**
+     * Reset the dispatcher after each test run.
+     */
     protected function tearDown(): void
     {
         CoroutineDispatcher::useDriver(null);
@@ -16,6 +22,9 @@ class CoroutineDispatcherTest extends TestCase
         parent::tearDown();
     }
 
+    /**
+     * Ensure tasks execute sequentially when no coroutine driver exists.
+     */
     public function testRunExecutesTasksSequentiallyWhenCoroutineUnavailable(): void
     {
         $order = [];
@@ -37,6 +46,9 @@ class CoroutineDispatcherTest extends TestCase
         $this->assertSame(['first', 'second'], $order);
     }
 
+    /**
+     * Ensure exceptions thrown within tasks bubble up to the caller.
+     */
     public function testRunPropagatesErrorsFromTasks(): void
     {
         $this->expectException(RuntimeException::class);
@@ -49,6 +61,9 @@ class CoroutineDispatcherTest extends TestCase
         ]);
     }
 
+    /**
+     * Ensure the dispatcher boots a coroutine scheduler when possible.
+     */
     public function testRunUsesCoroutineDriverOutsideExistingCoroutine(): void
     {
         $driver = new FakeCoroutineDriver();
