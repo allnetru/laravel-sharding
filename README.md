@@ -52,11 +52,19 @@ DB_SHARD_MIGRATIONS="shard-legacy;shard-archive"
 return [
     'default' => 'hash',
 
+    'strategies' => [
+        'hash' => Allnetru\Sharding\Strategies\HashStrategy::class,
+        'redis' => Allnetru\Sharding\Strategies\RedisStrategy::class,
+        'range' => Allnetru\Sharding\Strategies\RangeStrategy::class,
+        'db_range' => Allnetru\Sharding\Strategies\DbRangeStrategy::class,
+        'db_hash_range' => Allnetru\Sharding\Strategies\DbHashRangeStrategy::class,
+    ],
+
     'id_generator' => [
         'default' => 'snowflake',
         'strategies' => [
-            'snowflake' => Allnetru\\Sharding\\IdGenerators\\SnowflakeStrategy::class,
-            'sequence' => Allnetru\\Sharding\\IdGenerators\\TableSequenceStrategy::class,
+            'snowflake' => Allnetru\Sharding\IdGenerators\SnowflakeStrategy::class,
+            'sequence' => Allnetru\Sharding\IdGenerators\TableSequenceStrategy::class,
         ],
         'sequence_table' => 'shard_sequences',
         // 'meta_connection' => 'mysql',
