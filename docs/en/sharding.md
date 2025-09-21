@@ -38,11 +38,16 @@ return [
             // ... keep your existing base connections here
         ],
         // other non-sharded connections...
-    ], Shards::databaseConnections()),
+    ], Shards::databaseConnections(env('DB_SHARDS', ''))),
 
     // ...
 ];
 ```
+
+> **Tip**
+> Passing the `DB_SHARDS` string makes the helper work during the configuration
+> bootstrap phase. In other contexts you can call the helper without arguments
+> and it will read the `DB_SHARDS` environment variable directly.
 
 ### Creating a sharded table
 
