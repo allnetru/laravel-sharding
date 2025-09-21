@@ -86,8 +86,8 @@ return [
     'coroutines' => [
         'default' => env('SHARDING_COROUTINE_DRIVER', 'swoole'),
         'drivers' => [
-            'swoole' => Allnetru\Sharding\Support\Swoole\SwooleCoroutineDriver::class,
-            'sync' => Allnetru\Sharding\Support\Swoole\SyncCoroutineDriver::class,
+            'swoole' => Allnetru\Sharding\Support\Coroutine\Drivers\SwooleCoroutineDriver::class,
+            'sync' => Allnetru\Sharding\Support\Coroutine\Drivers\SyncCoroutineDriver::class,
         ],
     ],
 

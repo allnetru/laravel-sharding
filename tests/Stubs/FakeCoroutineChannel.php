@@ -2,7 +2,7 @@
 
 namespace Allnetru\Sharding\Tests\Stubs;
 
-use Allnetru\Sharding\Support\Swoole\CoroutineChannel;
+use Allnetru\Sharding\Support\Coroutine\CoroutineChannel;
 
 /**
  * In-memory channel implementation for exercising coroutine code paths.

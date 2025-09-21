@@ -2,7 +2,7 @@
 
 namespace Allnetru\Sharding;
 
-use Allnetru\Sharding\Support\Swoole\CoroutineDispatcher;
+use Allnetru\Sharding\Support\Coroutine\CoroutineDispatcher;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Pagination\Paginator;

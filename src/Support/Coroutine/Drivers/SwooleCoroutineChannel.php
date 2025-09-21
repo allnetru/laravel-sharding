@@ -1,6 +1,8 @@
 <?php
 
-namespace Allnetru\Sharding\Support\Swoole;
+namespace Allnetru\Sharding\Support\Coroutine\Drivers;
+
+use Allnetru\Sharding\Support\Coroutine\CoroutineChannel;
 
 /**
  * Thin wrapper around the native Swoole coroutine channel implementation.

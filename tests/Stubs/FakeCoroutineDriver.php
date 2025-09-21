@@ -2,8 +2,8 @@
 
 namespace Allnetru\Sharding\Tests\Stubs;
 
-use Allnetru\Sharding\Support\Swoole\CoroutineChannel;
-use Allnetru\Sharding\Support\Swoole\CoroutineDriver;
+use Allnetru\Sharding\Support\Coroutine\CoroutineChannel;
+use Allnetru\Sharding\Support\Coroutine\CoroutineDriver;
 use Closure;
 
 /**

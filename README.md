@@ -226,15 +226,15 @@ additional configuration is required.
 
 The default behaviour can be overridden from `config/sharding.php`. The
 `coroutines` section accepts any class or closure that returns an implementation
-of `Allnetru\Sharding\Support\Swoole\CoroutineDriver`, allowing you to disable
+of `Allnetru\Sharding\Support\Coroutine\CoroutineDriver`, allowing you to disable
 coroutines entirely or integrate with an alternative runtime:
 
 ```php
 'coroutines' => [
     'default' => env('SHARDING_COROUTINE_DRIVER', 'swoole'),
     'drivers' => [
-        'swoole' => Allnetru\Sharding\Support\Swoole\SwooleCoroutineDriver::class,
-        'sync' => Allnetru\Sharding\Support\Swoole\SyncCoroutineDriver::class,
+        'swoole' => Allnetru\Sharding\Support\Coroutine\Drivers\SwooleCoroutineDriver::class,
+        'sync' => Allnetru\Sharding\Support\Coroutine\Drivers\SyncCoroutineDriver::class,
         'amphp' => App\Sharding\AmpCoroutineDriver::class,
     ],
 ],

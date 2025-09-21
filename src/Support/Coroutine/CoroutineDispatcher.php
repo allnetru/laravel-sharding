@@ -1,20 +1,21 @@
 <?php
 
-namespace Allnetru\Sharding\Support\Swoole;
+namespace Allnetru\Sharding\Support\Coroutine;
 
+use Allnetru\Sharding\Support\Coroutine\Drivers\SwooleCoroutineDriver;
 use Closure;
 use Illuminate\Container\Container as IlluminateContainer;
 use Throwable;
 
 /**
- * Dispatch shard operations using Swoole coroutines when available.
+ * Dispatch shard operations using coroutine runtimes when available.
  */
 final class CoroutineDispatcher
 {
     private static ?CoroutineDriver $driver = null;
 
     /**
-     * Determine whether the runtime is currently inside a Swoole coroutine.
+     * Determine whether the runtime is currently inside a coroutine.
      *
      * @return bool
      */
@@ -24,7 +25,7 @@ final class CoroutineDispatcher
     }
 
     /**
-     * Run the given tasks concurrently when Swoole coroutines are available.
+     * Run the given tasks concurrently when a coroutine driver is available.
      *
      * @template TKey of array-key
      * @template TValue

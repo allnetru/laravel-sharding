@@ -1,14 +1,14 @@
 <?php
 
-namespace Allnetru\Sharding\Tests\Unit\Support\Swoole;
+namespace Allnetru\Sharding\Tests\Unit\Support\Coroutine;
 
-use Allnetru\Sharding\Support\Swoole\CoroutineDispatcher;
+use Allnetru\Sharding\Support\Coroutine\CoroutineDispatcher;
 use Allnetru\Sharding\Tests\Stubs\FakeCoroutineDriver;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
 /**
- * @covers \Allnetru\Sharding\Support\Swoole\CoroutineDispatcher
+ * @covers \Allnetru\Sharding\Support\Coroutine\CoroutineDispatcher
  */
 class CoroutineDispatcherTest extends TestCase
 {

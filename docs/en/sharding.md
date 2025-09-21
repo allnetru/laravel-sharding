@@ -161,15 +161,15 @@ parallel.
 
 You may override the coroutine driver through the `coroutines` section in
 `config/sharding.php`. Any class or closure that produces an implementation of
-`Allnetru\Sharding\Support\Swoole\CoroutineDriver` may be registered, letting
+`Allnetru\Sharding\Support\Coroutine\CoroutineDriver` may be registered, letting
 you disable concurrency entirely or plug in a different runtime:
 
 ```php
 'coroutines' => [
     'default' => env('SHARDING_COROUTINE_DRIVER', 'swoole'),
     'drivers' => [
-        'swoole' => Allnetru\Sharding\Support\Swoole\SwooleCoroutineDriver::class,
-        'sync' => Allnetru\Sharding\Support\Swoole\SyncCoroutineDriver::class,
+        'swoole' => Allnetru\Sharding\Support\Coroutine\Drivers\SwooleCoroutineDriver::class,
+        'sync' => Allnetru\Sharding\Support\Coroutine\Drivers\SyncCoroutineDriver::class,
         'amphp' => App\Sharding\AmpCoroutineDriver::class,
     ],
 ],

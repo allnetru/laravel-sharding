@@ -1,6 +1,6 @@
 <?php
 
-namespace Allnetru\Sharding\Support\Swoole;
+namespace Allnetru\Sharding\Support\Coroutine;
 
 /**
  * Lightweight channel abstraction for coroutine runtimes.
