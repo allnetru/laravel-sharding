@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Dispatch shard fan-out queries concurrently when running inside a Swoole coroutine.
+- Pending changes.
 
 ## [0.1.0]
 

@@ -30,3 +30,4 @@ composer lint
 ## QA and Release
 - Update documentation, configuration examples, and the changelog alongside code when behaviour changes.
 - Follow the release process described in `CONTRIBUTING.md`, ensuring automation and manual checks pass before tagging a new version.
+- Leave `CHANGELOG.md` untouched; it is updated automatically during the release flow.
