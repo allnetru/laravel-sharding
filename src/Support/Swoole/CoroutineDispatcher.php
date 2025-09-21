@@ -9,15 +9,14 @@ use Throwable;
  */
 final class CoroutineDispatcher
 {
+    private static ?CoroutineDriver $driver = null;
+
     /**
      * Determine whether the runtime is currently inside a Swoole coroutine.
      */
     public static function inCoroutine(): bool
     {
-        return extension_loaded('swoole')
-            && class_exists(\Swoole\Coroutine::class)
-            && class_exists(\Swoole\Coroutine\Channel::class)
-            && \Swoole\Coroutine::getCid() > 0;
+        return self::driver()->inCoroutine();
     }
 
     /**
@@ -35,21 +34,87 @@ final class CoroutineDispatcher
             return [];
         }
 
-        if (!self::inCoroutine()) {
-            $results = [];
+        $driver = self::driver();
 
-            foreach ($tasks as $key => $task) {
-                $results[$key] = $task();
-            }
-
-            return $results;
+        if (!$driver->isSupported()) {
+            return self::runSequentially($tasks);
         }
 
-        $order = array_keys($tasks);
-        $channel = new \Swoole\Coroutine\Channel(count($tasks));
+        if ($driver->inCoroutine()) {
+            return self::dispatchInCoroutine($tasks, $driver);
+        }
+
+        $hasResult = false;
+        $result = null;
+        $error = null;
+
+        if ($driver->run(function () use ($tasks, $driver, &$result, &$hasResult, &$error): void {
+            try {
+                $result = self::dispatchInCoroutine($tasks, $driver);
+                $hasResult = true;
+            } catch (Throwable $throwable) {
+                $error = $throwable;
+            }
+        })) {
+            if ($error instanceof Throwable) {
+                throw $error;
+            }
+
+            if ($hasResult) {
+                /** @var array<TKey, TValue> $result */
+                return $result;
+            }
+        }
+
+        return self::runSequentially($tasks);
+    }
+
+    /**
+     * Swap the coroutine driver. Primarily used for testing.
+     */
+    public static function useDriver(?CoroutineDriver $driver): void
+    {
+        self::$driver = $driver;
+    }
+
+    private static function driver(): CoroutineDriver
+    {
+        return self::$driver ??= new SwooleCoroutineDriver();
+    }
+
+    /**
+     * @template TKey of array-key
+     * @template TValue
+     *
+     * @param array<TKey, callable(): TValue> $tasks
+     * @return array<TKey, TValue>
+     */
+    private static function runSequentially(array $tasks): array
+    {
+        $results = [];
 
         foreach ($tasks as $key => $task) {
-            \Swoole\Coroutine::create(function () use ($channel, $key, $task): void {
+            $results[$key] = $task();
+        }
+
+        return $results;
+    }
+
+    /**
+     * @template TKey of array-key
+     * @template TValue
+     *
+     * @param array<TKey, callable(): TValue> $tasks
+     * @param CoroutineDriver $driver
+     * @return array<TKey, TValue>
+     */
+    private static function dispatchInCoroutine(array $tasks, CoroutineDriver $driver): array
+    {
+        $order = array_keys($tasks);
+        $channel = $driver->makeChannel(count($tasks));
+
+        foreach ($tasks as $key => $task) {
+            $driver->create(function () use ($channel, $key, $task): void {
                 try {
                     $channel->push([
                         'key' => $key,
@@ -105,6 +170,7 @@ final class CoroutineDispatcher
             }
         }
 
+        /** @var array<TKey, TValue> $ordered */
         return $ordered;
     }
 }

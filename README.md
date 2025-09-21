@@ -217,9 +217,10 @@ Insertions also resolve the target shard automatically. If you omit the primary 
 When the PHP process is executed inside a Swoole coroutine context (for example,
 Laravel Octane with the Swoole engine), shard fan-out queries are dispatched
 concurrently. The package detects the coroutine runtime automatically and uses
-channels to aggregate results without blocking on each individual shard. No
-additional configuration is required—outside of a coroutine context the queries
-continue to run sequentially.
+channels to aggregate results without blocking on each individual shard. When a
+request is not already inside a coroutine, the dispatcher boots a
+`Swoole\Coroutine::run()` scheduler so the queries still run in parallel. No
+additional configuration is required.
 
 ### Console tooling
 

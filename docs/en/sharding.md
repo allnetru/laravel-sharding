@@ -153,8 +153,9 @@ When the application runs within a Swoole coroutine runtime, read queries that
 fan out across multiple shards are executed concurrently. Laravel Octane with
 the Swoole engine automatically enables this behaviour. The package aggregates
 the results through coroutine channels so the request waits only for the
-slowest shard. Outside of a coroutine environment the queries continue to run
-sequentially.
+slowest shard. When code executes outside an existing coroutine, the dispatcher
+boots a lightweight coroutine scheduler so queries still complete in
+parallel.
 
 ## Creating records
 
