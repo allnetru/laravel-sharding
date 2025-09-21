@@ -2,6 +2,7 @@
 
 namespace Allnetru\Sharding;
 
+use Allnetru\Sharding\Support\Swoole\CoroutineDispatcher;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Pagination\Paginator;
@@ -69,9 +70,13 @@ class ShardBuilder extends EloquentBuilder
         $batches = [];
         $indexes = [];
 
-        foreach ($this->connections() as $name => $config) {
+        $batches = $this->runOnConnections(function (string $name, array $config) use ($columns) {
             $builder = $this->replicateForConnection($name);
-            $batches[$name] = $builder->get($columns)->all();
+
+            return $builder->get($columns)->all();
+        });
+
+        foreach ($batches as $name => $items) {
             $indexes[$name] = 0;
         }
 
@@ -101,6 +106,31 @@ class ShardBuilder extends EloquentBuilder
         }
 
         return $this->getModel()->newCollection($results);
+    }
+
+    /**
+     * Execute the callback for each configured connection, leveraging Swoole when available.
+     *
+     * @template TValue
+     *
+     * @param callable(string, array<string, mixed>): TValue $callback
+     * @return array<string, TValue>
+     */
+    protected function runOnConnections(callable $callback): array
+    {
+        $connections = $this->connections();
+
+        if ($connections === []) {
+            return [];
+        }
+
+        $tasks = [];
+
+        foreach ($connections as $name => $config) {
+            $tasks[$name] = fn () => $callback($name, $config);
+        }
+
+        return CoroutineDispatcher::run($tasks);
     }
 
     /**

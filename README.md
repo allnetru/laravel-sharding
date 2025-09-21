@@ -212,6 +212,15 @@ $partners = Organization::where('status', OrganizationStatus::partner)
 
 Insertions also resolve the target shard automatically. If you omit the primary key the configured ID generator assigns one before the record is saved.
 
+### Running under Swoole
+
+When the PHP process is executed inside a Swoole coroutine context (for example,
+Laravel Octane with the Swoole engine), shard fan-out queries are dispatched
+concurrently. The package detects the coroutine runtime automatically and uses
+channels to aggregate results without blocking on each individual shard. No
+additional configuration is required—outside of a coroutine context the queries
+continue to run sequentially.
+
 ### Console tooling
 
 Use the bundled Artisan commands to inspect and maintain shards:

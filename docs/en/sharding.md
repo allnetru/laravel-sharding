@@ -147,6 +147,15 @@ $partners = Organization::where('status', OrganizationStatus::partner)
 
 These calls transparently span all shards defined for the target table.
 
+### Coroutine execution with Swoole
+
+When the application runs within a Swoole coroutine runtime, read queries that
+fan out across multiple shards are executed concurrently. Laravel Octane with
+the Swoole engine automatically enables this behaviour. The package aggregates
+the results through coroutine channels so the request waits only for the
+slowest shard. Outside of a coroutine environment the queries continue to run
+sequentially.
+
 ## Creating records
 
 Models also handle inserts across shards. When a `Shardable` model is created
