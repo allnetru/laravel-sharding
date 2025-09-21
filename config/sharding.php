@@ -75,6 +75,24 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Coroutine Drivers
+    |--------------------------------------------------------------------------
+    |
+    | Configure how shard fan-out queries leverage coroutine runtimes. By
+    | default the package will use the Swoole extension when present. Set the
+    | default driver to "sync" to disable concurrency or register custom
+    | drivers to integrate with other runtimes.
+    */
+    'coroutines' => [
+        'default' => env('SHARDING_COROUTINE_DRIVER', 'swoole'),
+        'drivers' => [
+            'swoole' => Allnetru\Sharding\Support\Swoole\SwooleCoroutineDriver::class,
+            'sync' => Allnetru\Sharding\Support\Swoole\SyncCoroutineDriver::class,
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Table Definitions
     |--------------------------------------------------------------------------
     |

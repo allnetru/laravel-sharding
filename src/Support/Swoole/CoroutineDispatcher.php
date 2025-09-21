@@ -2,6 +2,8 @@
 
 namespace Allnetru\Sharding\Support\Swoole;
 
+use Closure;
+use Illuminate\Container\Container as IlluminateContainer;
 use Throwable;
 
 /**
@@ -71,6 +73,8 @@ final class CoroutineDispatcher
 
     /**
      * Swap the coroutine driver. Primarily used for testing.
+     *
+     * Set to null to reload the configured driver on the next call.
      */
     public static function useDriver(?CoroutineDriver $driver): void
     {
@@ -79,7 +83,116 @@ final class CoroutineDispatcher
 
     private static function driver(): CoroutineDriver
     {
-        return self::$driver ??= new SwooleCoroutineDriver();
+        if (self::$driver instanceof CoroutineDriver) {
+            return self::$driver;
+        }
+
+        if (($configured = self::configuredDriver()) instanceof CoroutineDriver) {
+            return self::$driver = $configured;
+        }
+
+        return self::$driver = new SwooleCoroutineDriver();
+    }
+
+    private static function configuredDriver(): ?CoroutineDriver
+    {
+        $container = class_exists(IlluminateContainer::class)
+            ? IlluminateContainer::getInstance()
+            : null;
+
+        if ($container !== null && $container->bound('config')) {
+            try {
+                /** @var mixed $config */
+                $config = $container->make('config')->get('sharding.coroutines');
+            } catch (Throwable) {
+                return null;
+            }
+        } elseif (function_exists('config')) {
+            try {
+                $config = config('sharding.coroutines');
+            } catch (Throwable) {
+                return null;
+            }
+        } else {
+            return null;
+        }
+
+        if (!is_array($config)) {
+            return null;
+        }
+
+        $name = $config['default'] ?? $config['driver'] ?? null;
+
+        if (!is_string($name) || $name === '') {
+            return null;
+        }
+
+        $registry = $config['drivers'] ?? [];
+
+        if (!is_array($registry) || !array_key_exists($name, $registry)) {
+            return null;
+        }
+
+        return self::resolveConfiguredDriver($registry[$name]);
+    }
+
+    private static function resolveConfiguredDriver(mixed $definition): ?CoroutineDriver
+    {
+        if ($definition instanceof CoroutineDriver) {
+            return $definition;
+        }
+
+        $container = class_exists(IlluminateContainer::class)
+            ? IlluminateContainer::getInstance()
+            : null;
+
+        if ($definition instanceof Closure) {
+            if ($container !== null) {
+                try {
+                    return self::resolveConfiguredDriver($container->call($definition));
+                } catch (Throwable) {
+                    // Fallback to executing the closure without container injection.
+                }
+            }
+
+            return self::resolveConfiguredDriver($definition());
+        }
+
+        if (is_string($definition) && $definition !== '') {
+            if (function_exists('app')) {
+                try {
+                    $resolved = app($definition);
+
+                    if ($resolved instanceof CoroutineDriver) {
+                        return $resolved;
+                    }
+                } catch (Throwable) {
+                    // Ignore and fallback to manual instantiation.
+                }
+            }
+
+            if ($container !== null) {
+                try {
+                    $resolved = $container->make($definition);
+
+                    if ($resolved instanceof CoroutineDriver) {
+                        return $resolved;
+                    }
+                } catch (Throwable) {
+                    // Ignore and fallback to manual instantiation.
+                }
+            }
+
+            if (class_exists($definition)) {
+                $resolved = new $definition();
+
+                if ($resolved instanceof CoroutineDriver) {
+                    return $resolved;
+                }
+            }
+        }
+
+        return null;
     }
 
     /**

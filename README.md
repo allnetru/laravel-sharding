@@ -222,6 +222,29 @@ request is not already inside a coroutine, the dispatcher boots a
 `Swoole\Coroutine::run()` scheduler so the queries still run in parallel. No
 additional configuration is required.
 
+#### Custom coroutine drivers
+
+The default behaviour can be overridden from `config/sharding.php`. The
+`coroutines` section accepts any class or closure that returns an implementation
+of `Allnetru\Sharding\Support\Swoole\CoroutineDriver`, allowing you to disable
+coroutines entirely or integrate with an alternative runtime:
+
+```php
+'coroutines' => [
+    'default' => env('SHARDING_COROUTINE_DRIVER', 'swoole'),
+    'drivers' => [
+        'swoole' => Allnetru\Sharding\Support\Swoole\SwooleCoroutineDriver::class,
+        'sync' => Allnetru\Sharding\Support\Swoole\SyncCoroutineDriver::class,
+        'amphp' => App\Sharding\AmpCoroutineDriver::class,
+    ],
+],
+```
+
+Point the `default` driver to `sync` (or set `SHARDING_COROUTINE_DRIVER=sync`) to
+keep fan-out queries synchronous. Custom drivers may be resolved through the
+Laravel container, so you can bind them as singletons or expose factory closures
+for more advanced scenarios.
+
 ### Console tooling
 
 Use the bundled Artisan commands to inspect and maintain shards:
