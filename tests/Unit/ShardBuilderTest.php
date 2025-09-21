@@ -148,6 +148,75 @@ class ShardBuilderTest extends TestCase
         $this->assertSame([1, 2], $parents[0]->children->pluck('id')->all());
         $this->assertSame([3, 4], $parents[1]->children->pluck('id')->all());
     }
+
+    public function testGetWithoutExplicitOrderUsesPrimaryKey(): void
+    {
+        foreach ([5, 1, 3, 2, 4] as $id) {
+            $target = $id % 2 === 0 ? 'shard_2' : 'shard_1';
+            DB::connection($target)->table('items')->insert(['id' => $id, 'value' => $id, 'is_replica' => false]);
+        }
+
+        $values = Item::get()->pluck('id')->all();
+
+        $this->assertSame([1, 2, 3, 4, 5], $values);
+    }
+
+    public function testChunkIteratesAcrossAllConnections(): void
+    {
+        foreach (range(1, 6) as $id) {
+            $target = $id <= 3 ? 'shard_1' : 'shard_2';
+            DB::connection($target)->table('items')->insert(['id' => $id, 'value' => $id, 'is_replica' => false]);
+        }
+
+        $seen = [];
+        $result = Item::orderBy('id')->chunk(2, function ($items) use (&$seen): void {
+            foreach ($items as $item) {
+                $seen[] = $item->id;
+            }
+        });
+
+        $this->assertTrue($result);
+        $this->assertSame(range(1, 6), $seen);
+    }
+
+    public function testChunkByIdIteratesAcrossAllConnections(): void
+    {
+        foreach (range(1, 6) as $id) {
+            $target = $id <= 3 ? 'shard_1' : 'shard_2';
+            DB::connection($target)->table('items')->insert(['id' => $id, 'value' => $id, 'is_replica' => false]);
+        }
+
+        $seen = [];
+        $result = Item::orderBy('id')->chunkById(2, function ($items) use (&$seen): void {
+            foreach ($items as $item) {
+                $seen[] = $item->id;
+            }
+        });
+
+        $this->assertTrue($result);
+        $this->assertSame(range(1, 6), $seen);
+    }
+
+    public function testFirstOrCreateFindsExistingAcrossConnections(): void
+    {
+        DB::connection('shard_2')->table('items')->insert(['id' => 50, 'value' => 100, 'is_replica' => false]);
+
+        $item = Item::query()->firstOrCreate(['id' => 50], ['value' => 200]);
+
+        $this->assertSame(100, $item->value);
+        $this->assertSame('shard_2', $item->getConnectionName());
+    }
+
+    public function testUpdateOrCreateUpdatesExistingAcrossConnections(): void
+    {
+        DB::connection('shard_1')->table('items')->insert(['id' => 75, 'value' => 10, 'is_replica' => false]);
+
+        $item = Item::query()->updateOrCreate(['id' => 75], ['value' => 20]);
+
+        $this->assertSame(20, $item->value);
+        $this->assertSame('shard_1', $item->getConnectionName());
+        $this->assertDatabaseHas('items', ['id' => 75, 'value' => 20], 'shard_1');
+    }
 }
 
 class Item extends Model

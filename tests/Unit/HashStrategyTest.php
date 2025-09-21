@@ -31,4 +31,34 @@ class HashStrategyTest extends TestCase
 
         $this->assertSame([$primary, $replica], $strategy->determine($key, $config));
     }
+
+    public function testDetermineThrowsWhenConnectionsMissing(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('No shards configured.');
+
+        (new HashStrategy())->determine('foo', []);
+    }
+
+    public function testRecordMethodsAreNoOps(): void
+    {
+        $strategy = new HashStrategy();
+
+        $strategy->recordMeta('key', ['shard1'], []);
+        $strategy->recordReplica('key', 'shard1', []);
+
+        $this->assertFalse($strategy->canRebalance());
+    }
+
+    public function testRebalanceThrowsBecauseStrategyDoesNotSupportIt(): void
+    {
+        $strategy = new HashStrategy();
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Rebalancing is not supported for hash strategy.');
+
+        $strategy->rebalance('table', 'id', null, null, null, null, [
+            'connections' => ['a' => ['weight' => 1]],
+        ]);
+    }
 }
