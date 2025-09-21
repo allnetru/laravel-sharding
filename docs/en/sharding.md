@@ -7,7 +7,7 @@ This application provides a pluggable sharding system that allows each table to 
 Shard connections are defined via the `DB_SHARDS` environment variable. Each shard is written as `name:host:port:database` and multiple shards are separated by semicolons:
 
 ```
-DB_SHARDS="shard_1:db1.example.com:3306:app_db1;shard_2:db2.example.com:3306:app_db2"
+DB_SHARDS="shard-1:db1.example.com:3306:app_db1;shard-2:db2.example.com:3306:app_db2"
 ```
 
 Each environment can set its own `DB_SHARDS` value to match the number of servers. Other options like `DB_USERNAME` and `DB_PASSWORD` are shared across all shards.
@@ -110,8 +110,8 @@ return [
             'redis_connection' => 'shards',
             'redis_prefix' => 'user_shard:',
             'connections' => [
-                'shard_1' => ['weight' => 1],
-                'shard_2' => ['weight' => 1],
+                'shard-1' => ['weight' => 1],
+                'shard-2' => ['weight' => 1],
             ],
             'group' => 'user_data',
         ],
