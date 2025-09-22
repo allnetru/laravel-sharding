@@ -3,6 +3,7 @@
 namespace Allnetru\Sharding\Console\Commands\Shards;
 
 use Allnetru\Sharding\ShardingManager;
+use Allnetru\Sharding\Support\Database\ForeignKeyConstraintDetector;
 use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
@@ -31,9 +32,10 @@ class Distribute extends Command
      * Execute the console command.
      *
      * @param ShardingManager $manager
+     * @param ForeignKeyConstraintDetector $foreignKeyDetector
      * @return int
      */
-    public function handle(ShardingManager $manager): int
+    public function handle(ShardingManager $manager, ForeignKeyConstraintDetector $foreignKeyDetector): int
     {
         $model = $this->resolveModel($this->argument('model'));
 
@@ -54,7 +56,7 @@ class Distribute extends Command
 
             $sourceConnection = $tableModel->getConnectionName() ?: config('database.default');
 
-            if ($this->hasForeignKeys($sourceConnection, $table)) {
+            if ($foreignKeyDetector->hasForeignKeys($sourceConnection, $table)) {
                 $this->error("Foreign key constraints detected for table {$table}. Drop them before sharding.");
 
                 return self::FAILURE;
@@ -99,25 +101,6 @@ class Distribute extends Command
         $this->info("Moved {$moved} records to shards.");
 
         return self::SUCCESS;
-    }
-
-    /**
-     * Determine if the given table has foreign key constraints.
-     *
-     * @param string $connection
-     * @param string $table
-     * @return bool
-     */
-    protected function hasForeignKeys(string $connection, string $table): bool
-    {
-        $database = DB::connection($connection)->getDatabaseName();
-
-        $foreign = DB::connection($connection)->select(
-            'SELECT 1 FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = ? AND (TABLE_NAME = ? OR REFERENCED_TABLE_NAME = ?) AND REFERENCED_TABLE_NAME IS NOT NULL LIMIT 1',
-            [$database, $table, $table]
-        );
-
-        return !empty($foreign);
     }
 
     /**
