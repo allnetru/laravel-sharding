@@ -3,13 +3,13 @@
 [![Packagist Version](https://img.shields.io/packagist/v/allnetru/laravel-sharding.svg)](https://packagist.org/packages/allnetru/laravel-sharding)
 [![Tests](https://github.com/allnetru/laravel-sharding/actions/workflows/run-tests.yml/badge.svg?branch=main)](https://github.com/allnetru/laravel-sharding/actions/workflows/run-tests.yml)
 
-Laravel Sharding is a toolkit for distributing data across multiple databases while keeping a familiar Eloquent workflow. The package powers production applications and provides pluggable strategies so each table can select the most appropriate sharding approach.
+Laravel Sharding is a toolkit for distributing data across multiple databases while keeping a familiar Eloquent workflow. The package powers production applications and provides pluggable strategies so each table can select the most appropriate sharding approach. Shards can run on MySQL, PostgreSQL, SQL Server, or SQLite as long as the connections are available to Laravel.
 
 ## Requirements
 
 - PHP ^8.2
 - Laravel 12.x or any framework using Illuminate 12 components
-- MySQL-compatible databases for shard connections
+- MySQL, PostgreSQL, SQL Server, or SQLite for shard connections
 - Redis (optional) when using the Redis-backed strategy
 
 ## Installation
@@ -67,7 +67,7 @@ return [
             'sequence' => Allnetru\Sharding\IdGenerators\TableSequenceStrategy::class,
         ],
         'sequence_table' => 'shard_sequences',
-        // 'meta_connection' => 'mysql',
+        // 'meta_connection' => 'pgsql', // use any connection name configured in database.php
     ],
 
     'connections' => [
@@ -130,7 +130,7 @@ return [
 ];
 ```
 
-Update `config/database.php` to merge the generated shard connections with your base definitions:
+Update `config/database.php` to merge the generated shard connections with your base definitions. The examples below use MySQL, but you can swap in any of Laravel's supported drivers:
 
 ```php
 // config/database.php (excerpt)
