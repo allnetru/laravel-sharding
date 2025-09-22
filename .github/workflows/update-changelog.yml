@@ -29,26 +29,26 @@ jobs:
         id: cpr
         uses: peter-evans/create-pull-request@v6
         with:
+          token: ${{ secrets.PR_BOT_TOKEN }}
           commit-message: "chore: update CHANGELOG for ${{ github.event.release.name }}"
           title: "chore: update CHANGELOG for ${{ github.event.release.name }}"
           body: |
             This PR updates **CHANGELOG.md** from the released notes.
-
-            - **Release:** `${{ github.event.release.name }}`
-            - Triggered by a `release: released` event.
+            - Release: `${{ github.event.release.name }}`
+            - Triggered by `release: released`
           branch: "chore/update-changelog-${{ github.event.release.tag_name || github.event.release.name }}"
           base: "main"
-          add-paths: |
-            CHANGELOG.md
+          add-paths: CHANGELOG.md
           labels: |
             changelog
             automation
           signoff: true
           delete-branch: true
+
       - name: Enable auto-merge
         if: steps.cpr.outputs.pull-request-operation == 'created'
         uses: peter-evans/enable-pull-request-automerge@v3
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PR_BOT_TOKEN }}
           pull-request-number: ${{ steps.cpr.outputs.pull-request-number }}
           merge-method: squash
