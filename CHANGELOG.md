@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.1.5 - 2025-09-22
+
+### What's Changed
+
+* chore: update CHANGELOG for v0.1.4 by @allnetru in https://github.com/allnetru/laravel-sharding/pull/21
+* Bump peter-evans/create-pull-request from 6 to 7 by @dependabot[bot] in https://github.com/allnetru/laravel-sharding/pull/22
+* Handle unique constraint violations across drivers by @allnetru in https://github.com/allnetru/laravel-sharding/pull/23
+
+### New Contributors
+
+* @dependabot[bot] made their first contribution in https://github.com/allnetru/laravel-sharding/pull/22
+
+**Full Changelog**: https://github.com/allnetru/laravel-sharding/compare/v0.1.4...v0.1.5
+
 ## v0.1.4 - 2025-09-22
 
 ### What's Changed
