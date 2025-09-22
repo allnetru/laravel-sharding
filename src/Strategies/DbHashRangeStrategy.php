@@ -3,6 +3,7 @@
 namespace Allnetru\Sharding\Strategies;
 
 use Allnetru\Sharding\Models\ShardSlot;
+use Allnetru\Sharding\Support\Database\UniqueConstraintViolationDetector;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
@@ -222,7 +223,7 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
 
                     return;
                 } catch (QueryException $e) {
-                    if ($e->getCode() !== '23000') {
+                    if (!UniqueConstraintViolationDetector::causedBy($e)) {
                         throw $e;
                     }
 
