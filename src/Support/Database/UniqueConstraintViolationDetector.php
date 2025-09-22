@@ -35,7 +35,6 @@ final class UniqueConstraintViolationDetector
      * Check if the given query exception resulted from a unique constraint violation.
      *
      * @param QueryException $exception
-     *
      * @return bool
      */
     public static function causedBy(QueryException $exception): bool
@@ -56,7 +55,6 @@ final class UniqueConstraintViolationDetector
      * Inspect the QueryException payload for markers of a duplicate key violation.
      *
      * @param QueryException $exception
-     *
      * @return bool
      */
     private static function matchesQueryException(QueryException $exception): bool
@@ -82,7 +80,6 @@ final class UniqueConstraintViolationDetector
      *
      * @param array<int, mixed>|null $errorInfo
      * @param string|int|null $code
-     *
      * @return bool
      */
     private static function matchesErrorSignature(?array $errorInfo, string|int|null $code): bool
@@ -115,7 +112,6 @@ final class UniqueConstraintViolationDetector
      * Normalise an SQLSTATE or driver error code for comparison.
      *
      * @param string|int $code
-     *
      * @return bool
      */
     private static function matchesCode(string|int $code): bool
@@ -141,7 +137,6 @@ final class UniqueConstraintViolationDetector
      * Determine whether the provided code belongs to the SQLSTATE class of unique violations.
      *
      * @param string $code
-     *
      * @return bool
      */
     private static function matchesSqlState(string $code): bool
@@ -153,7 +148,6 @@ final class UniqueConstraintViolationDetector
      * Determine whether the provided driver error code represents a duplicate entry violation.
      *
      * @param int $code
-     *
      * @return bool
      */
     private static function matchesDriverCode(int $code): bool
