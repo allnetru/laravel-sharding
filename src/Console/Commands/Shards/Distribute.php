@@ -6,6 +6,7 @@ use Allnetru\Sharding\ShardingManager;
 use Illuminate\Console\Command;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -129,12 +130,14 @@ class Distribute extends Command
     {
         $database = $connection->getDatabaseName();
 
-        $foreign = $connection->select(
-            'SELECT 1 FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = ? AND (TABLE_NAME = ? OR REFERENCED_TABLE_NAME = ?) AND REFERENCED_TABLE_NAME IS NOT NULL LIMIT 1',
-            [$database, $table, $table]
-        );
-
-        return !empty($foreign);
+        return $connection->table('information_schema.KEY_COLUMN_USAGE')
+            ->where('TABLE_SCHEMA', $database)
+            ->where(function (QueryBuilder $query) use ($table): void {
+                $query->where('TABLE_NAME', $table)
+                    ->orWhere('REFERENCED_TABLE_NAME', $table);
+            })
+            ->whereNotNull('REFERENCED_TABLE_NAME')
+            ->exists();
     }
 
     /**
@@ -148,25 +151,22 @@ class Distribute extends Command
             $schema = $this->resolvePostgresDefaultSchema($connection);
         }
 
-        $foreign = $connection->select(
-            <<<'SQL'
-SELECT 1
-FROM pg_catalog.pg_constraint c
-JOIN pg_catalog.pg_class tc ON c.conrelid = tc.oid
-JOIN pg_catalog.pg_namespace tn ON tn.oid = tc.relnamespace
-LEFT JOIN pg_catalog.pg_class rc ON c.confrelid = rc.oid
-LEFT JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace
-WHERE c.contype = 'f'
-  AND (
-        (tn.nspname = ? AND tc.relname = ?)
-        OR (rn.nspname = ? AND rc.relname = ?)
-      )
-LIMIT 1
-SQL,
-            [$schema, $tableName, $schema, $tableName]
-        );
-
-        return !empty($foreign);
+        return $connection->table('pg_catalog.pg_constraint as c')
+            ->join('pg_catalog.pg_class as tc', 'c.conrelid', '=', 'tc.oid')
+            ->join('pg_catalog.pg_namespace as tn', 'tn.oid', '=', 'tc.relnamespace')
+            ->leftJoin('pg_catalog.pg_class as rc', 'c.confrelid', '=', 'rc.oid')
+            ->leftJoin('pg_catalog.pg_namespace as rn', 'rn.oid', '=', 'rc.relnamespace')
+            ->where('c.contype', 'f')
+            ->where(function (QueryBuilder $query) use ($schema, $tableName): void {
+                $query->where(function (QueryBuilder $query) use ($schema, $tableName): void {
+                    $query->where('tn.nspname', $schema)
+                        ->where('tc.relname', $tableName);
+                })->orWhere(function (QueryBuilder $query) use ($schema, $tableName): void {
+                    $query->where('rn.nspname', $schema)
+                        ->where('rc.relname', $tableName);
+                });
+            })
+            ->exists();
     }
 
     /**
@@ -180,21 +180,21 @@ SQL,
             $schema = $this->resolveSqlServerDefaultSchema($connection);
         }
 
-        $foreign = $connection->select(
-            <<<'SQL'
-SELECT TOP 1 1
-FROM sys.foreign_keys fk
-JOIN sys.tables parent ON fk.parent_object_id = parent.object_id
-JOIN sys.schemas parent_schema ON parent.schema_id = parent_schema.schema_id
-LEFT JOIN sys.tables referenced ON fk.referenced_object_id = referenced.object_id
-LEFT JOIN sys.schemas referenced_schema ON referenced.schema_id = referenced_schema.schema_id
-WHERE (parent_schema.name = ? AND parent.name = ?)
-   OR (referenced_schema.name = ? AND referenced.name = ?)
-SQL,
-            [$schema, $tableName, $schema, $tableName]
-        );
-
-        return !empty($foreign);
+        return $connection->table('sys.foreign_keys as fk')
+            ->join('sys.tables as parent', 'fk.parent_object_id', '=', 'parent.object_id')
+            ->join('sys.schemas as parent_schema', 'parent.schema_id', '=', 'parent_schema.schema_id')
+            ->leftJoin('sys.tables as referenced', 'fk.referenced_object_id', '=', 'referenced.object_id')
+            ->leftJoin('sys.schemas as referenced_schema', 'referenced.schema_id', '=', 'referenced_schema.schema_id')
+            ->where(function (QueryBuilder $query) use ($schema, $tableName): void {
+                $query->where(function (QueryBuilder $query) use ($schema, $tableName): void {
+                    $query->where('parent_schema.name', $schema)
+                        ->where('parent.name', $tableName);
+                })->orWhere(function (QueryBuilder $query) use ($schema, $tableName): void {
+                    $query->where('referenced_schema.name', $schema)
+                        ->where('referenced.name', $tableName);
+                });
+            })
+            ->exists();
     }
 
     /**
@@ -208,7 +208,11 @@ SQL,
             return true;
         }
 
-        $tables = $connection->select("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'");
+        $tables = $connection->table('sqlite_master')
+            ->select('name')
+            ->where('type', 'table')
+            ->where('name', 'not like', 'sqlite_%')
+            ->get();
 
         foreach ($tables as $candidate) {
             $candidateName = $candidate->name ?? null;
