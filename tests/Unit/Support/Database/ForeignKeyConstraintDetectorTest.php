@@ -2,20 +2,23 @@
 
 declare(strict_types=1);
 
-namespace Allnetru\Sharding\Tests\Unit\Console\Commands\Shards;
+namespace Allnetru\Sharding\Tests\Unit\Support\Database;
 
-use Allnetru\Sharding\Console\Commands\Shards\Distribute;
+use Allnetru\Sharding\Support\Database\ForeignKeyConstraintDetector;
 use Allnetru\Sharding\Tests\TestCase;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
-final class DistributeCommandTest extends TestCase
+final class ForeignKeyConstraintDetectorTest extends TestCase
 {
+    private ForeignKeyConstraintDetector $detector;
+
     protected function setUp(): void
     {
         parent::setUp();
 
+        $this->detector = new ForeignKeyConstraintDetector();
         DB::connection('sqlite')->statement('PRAGMA foreign_keys = ON');
     }
 
@@ -28,7 +31,7 @@ final class DistributeCommandTest extends TestCase
         parent::tearDown();
     }
 
-    public function testHasForeignKeysDetectsOutgoingConstraintsOnSqlite(): void
+    public function testDetectsOutgoingConstraintsOnSqlite(): void
     {
         Schema::create('fk_parents', function (Blueprint $table): void {
             $table->id();
@@ -39,17 +42,10 @@ final class DistributeCommandTest extends TestCase
             $table->foreignId('parent_id')->constrained('fk_parents');
         });
 
-        $command = new class extends Distribute {
-            public function check(string $connection, string $table): bool
-            {
-                return $this->hasForeignKeys($connection, $table);
-            }
-        };
-
-        $this->assertTrue($command->check('sqlite', 'fk_children'));
+        $this->assertTrue($this->detector->hasForeignKeys('sqlite', 'fk_children'));
     }
 
-    public function testHasForeignKeysDetectsInboundConstraintsOnSqlite(): void
+    public function testDetectsInboundConstraintsOnSqlite(): void
     {
         Schema::create('fk_parents', function (Blueprint $table): void {
             $table->id();
@@ -60,30 +56,16 @@ final class DistributeCommandTest extends TestCase
             $table->foreignId('parent_id')->constrained('fk_parents');
         });
 
-        $command = new class extends Distribute {
-            public function check(string $connection, string $table): bool
-            {
-                return $this->hasForeignKeys($connection, $table);
-            }
-        };
-
-        $this->assertTrue($command->check('sqlite', 'fk_parents'));
+        $this->assertTrue($this->detector->hasForeignKeys('sqlite', 'fk_parents'));
     }
 
-    public function testHasForeignKeysReturnsFalseWhenNoConstraintsExist(): void
+    public function testReturnsFalseWhenNoConstraintsExist(): void
     {
         Schema::create('plain_tables', function (Blueprint $table): void {
             $table->id();
             $table->string('name');
         });
 
-        $command = new class extends Distribute {
-            public function check(string $connection, string $table): bool
-            {
-                return $this->hasForeignKeys($connection, $table);
-            }
-        };
-
-        $this->assertFalse($command->check('sqlite', 'plain_tables'));
+        $this->assertFalse($this->detector->hasForeignKeys('sqlite', 'plain_tables'));
     }
 }
