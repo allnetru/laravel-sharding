@@ -33,6 +33,10 @@ final class ForeignKeyConstraintDetector
 
     /**
      * Determine whether a MySQL-compatible connection has foreign keys for the given table.
+     *
+     * @param Connection $connection
+     * @param string $table
+     * @return bool
      */
     private function hasMySqlForeignKeys(Connection $connection, string $table): bool
     {
@@ -50,6 +54,10 @@ final class ForeignKeyConstraintDetector
 
     /**
      * Determine whether a PostgreSQL connection has foreign keys for the given table.
+     *
+     * @param Connection $connection
+     * @param string $table
+     * @return bool
      */
     private function hasPostgresForeignKeys(Connection $connection, string $table): bool
     {
@@ -79,6 +87,10 @@ final class ForeignKeyConstraintDetector
 
     /**
      * Determine whether a SQL Server connection has foreign keys for the given table.
+     *
+     * @param Connection $connection
+     * @param string $table
+     * @return bool
      */
     private function hasSqlServerForeignKeys(Connection $connection, string $table): bool
     {
@@ -107,6 +119,10 @@ final class ForeignKeyConstraintDetector
 
     /**
      * Determine whether a SQLite connection has foreign keys for the given table.
+     *
+     * @param Connection $connection
+     * @param string $table
+     * @return bool
      */
     private function hasSqliteForeignKeys(Connection $connection, string $table): bool
     {
@@ -142,6 +158,7 @@ final class ForeignKeyConstraintDetector
     /**
      * Extract the schema-qualified parts from the provided table name.
      *
+     * @param string $table
      * @return array{0:string|null,1:string}
      */
     private function splitQualifiedTable(string $table): array
@@ -155,6 +172,10 @@ final class ForeignKeyConstraintDetector
         return [null, $table];
     }
 
+    /**
+     * @param Connection $connection
+     * @return string
+     */
     private function resolvePostgresDefaultSchema(Connection $connection): string
     {
         $schema = $connection->getConfig('schema');
@@ -176,6 +197,10 @@ final class ForeignKeyConstraintDetector
         return 'public';
     }
 
+    /**
+     * @param Connection $connection
+     * @return string
+     */
     private function resolveSqlServerDefaultSchema(Connection $connection): string
     {
         $schema = $connection->getConfig('schema');
@@ -198,6 +223,8 @@ final class ForeignKeyConstraintDetector
     }
 
     /**
+     * @param Connection $connection
+     * @param string $table
      * @return array<int, object>
      */
     private function fetchSqliteForeignKeys(Connection $connection, string $table): array
@@ -207,6 +234,10 @@ final class ForeignKeyConstraintDetector
         return $connection->select("PRAGMA foreign_key_list('{$quoted}')");
     }
 
+    /**
+     * @param string $table
+     * @return string
+     */
     private function normalizeSqliteTableName(string $table): string
     {
         return str_replace(['"', "'", '`'], '', $table);
