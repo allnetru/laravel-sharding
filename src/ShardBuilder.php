@@ -3,6 +3,7 @@
 namespace Allnetru\Sharding;
 
 use Allnetru\Sharding\Support\Coroutine\CoroutineDispatcher;
+use Closure;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Pagination\Paginator;
@@ -299,10 +300,14 @@ class ShardBuilder extends EloquentBuilder
     /**
      * @inheritdoc
      */
-    public function firstOrCreate(array $attributes = [], array $values = [])
+    public function firstOrCreate(array $attributes = [], Closure|array $values = [])
     {
         if ($instance = $this->firstAcrossConnections($attributes)) {
             return $instance;
+        }
+
+        if ($values instanceof Closure) {
+            $values = $values();
         }
 
         return parent::create(array_merge($attributes, $values));
