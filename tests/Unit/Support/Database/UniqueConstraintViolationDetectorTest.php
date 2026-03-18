@@ -5,6 +5,7 @@ namespace Allnetru\Sharding\Tests\Unit\Support\Database;
 use Allnetru\Sharding\Support\Database\UniqueConstraintViolationDetector;
 use Illuminate\Database\QueryException;
 use PDOException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -16,9 +17,8 @@ class UniqueConstraintViolationDetectorTest extends TestCase
      * @param array<int, mixed>|null $errorInfo
      * @param string|int|null $code
      * @param bool $expected
-     *
-     * @dataProvider detectionDataProvider
      */
+    #[DataProvider('detectionDataProvider')]
     public function testDetectorRecognisesUniqueConstraintViolations(?array $errorInfo, string|int|null $code, bool $expected): void
     {
         $exception = $this->makeException($errorInfo, $code);
