@@ -18,6 +18,27 @@ jobs:
         laravel: [^12.0]
         testbench: [^10.0]
         dependency-version: [prefer-lowest, prefer-stable]
+        include:
+          - os: ubuntu-latest
+            php: 8.4
+            laravel: ^13.0
+            testbench: ^11.0
+            dependency-version: prefer-stable
+          - os: ubuntu-latest
+            php: 8.3
+            laravel: ^13.0
+            testbench: ^11.0
+            dependency-version: prefer-stable
+          - os: ubuntu-latest
+            php: 8.4
+            laravel: ^13.0
+            testbench: ^11.0
+            dependency-version: prefer-lowest
+          - os: ubuntu-latest
+            php: 8.3
+            laravel: ^13.0
+            testbench: ^11.0
+            dependency-version: prefer-lowest
 
     name: P${{ matrix.php }} - L${{ matrix.laravel }} - ${{ matrix.dependency-version }} - ${{ matrix.os }}
 
