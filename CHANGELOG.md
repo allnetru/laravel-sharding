@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.1.6 - 2026-03-18
+
+### What's Changed
+
+* chore: update CHANGELOG for v0.1.5 by @allnetru in https://github.com/allnetru/laravel-sharding/pull/24
+* Bump actions/checkout from 5 to 6 by @dependabot[bot] in https://github.com/allnetru/laravel-sharding/pull/25
+* Bump symfony/http-foundation from 7.3.3 to 7.4.0 in the composer group across 1 directory by @dependabot[bot] in https://github.com/allnetru/laravel-sharding/pull/26
+* Bump peter-evans/create-pull-request from 7 to 8 by @dependabot[bot] in https://github.com/allnetru/laravel-sharding/pull/27
+* Bump phpunit/phpunit from 11.5.39 to 11.5.50 in the composer group across 1 directory by @dependabot[bot] in https://github.com/allnetru/laravel-sharding/pull/28
+* Claude skills by @allnetru in https://github.com/allnetru/laravel-sharding/pull/31
+* Bump the composer group across 1 directory with 2 updates by @dependabot[bot] in https://github.com/allnetru/laravel-sharding/pull/29
+* Bump ramsey/composer-install from 3 to 4 by @dependabot[bot] in https://github.com/allnetru/laravel-sharding/pull/30
+* Bump league/commonmark from 2.7.1 to 2.8.1 in the composer group across 1 directory by @dependabot[bot] in https://github.com/allnetru/laravel-sharding/pull/32
+
+**Full Changelog**: https://github.com/allnetru/laravel-sharding/compare/v0.1.5...v0.1.6
+
 ## v0.1.5 - 2025-09-22
 
 ### What's Changed
