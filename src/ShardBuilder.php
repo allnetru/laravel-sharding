@@ -316,8 +316,12 @@ class ShardBuilder extends EloquentBuilder
     /**
      * @inheritdoc
      */
-    public function updateOrCreate(array $attributes, array $values = [])
+    public function updateOrCreate(array $attributes, Closure|array $values = [])
     {
+        if ($values instanceof Closure) {
+            $values = $values();
+        }
+
         if ($instance = $this->firstAcrossConnections($attributes)) {
             $instance->fill($values);
             $instance->save();
