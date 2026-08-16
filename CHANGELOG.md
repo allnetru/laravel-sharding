@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.2.1 - 2026-08-16
+
+### What's Changed
+
+* chore: update CHANGELOG for v0.2.0 by @allnetru in https://github.com/allnetru/laravel-sharding/pull/35
+* Bump league/commonmark from 2.8.1 to 2.8.2 in the composer group across 1 directory by @dependabot[bot] in https://github.com/allnetru/laravel-sharding/pull/36
+* fix: Laravel 13 compatibility for ShardBuilder::updateOrCreate by @allnetru in https://github.com/allnetru/laravel-sharding/pull/39
+* Bump symfony/routing from 7.3.2 to 7.4.15 in the composer group across 1 directory by @dependabot[bot] in https://github.com/allnetru/laravel-sharding/pull/37
+* Bump actions/checkout from 6 to 7 by @dependabot[bot] in https://github.com/allnetru/laravel-sharding/pull/38
+
+**Full Changelog**: https://github.com/allnetru/laravel-sharding/compare/v0.2.0...v0.2.1
+
 ## v0.2.0 - 2026-03-18
 
 ### What's Changed
