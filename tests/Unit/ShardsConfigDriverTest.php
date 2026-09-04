@@ -51,7 +51,7 @@ class ShardsConfigDriverTest extends TestCase
     {
         putenv('DB_SHARD_DRIVER=pgsql');
 
-        // Порт в записи опущен намеренно
+        // the port is left out of the entry on purpose
         $connections = Shards::databaseConnections('shard-1:127.0.0.1::app_shard_1');
 
         $this->assertSame('5432', $connections['shard-1']['port']);

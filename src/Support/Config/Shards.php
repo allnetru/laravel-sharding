@@ -92,9 +92,9 @@ class Shards
         $baseConfig = self::baseConfig();
         $definitions ??= self::env('DB_SHARDS');
         $definitions = (string) $definitions;
-        // Порт по умолчанию зависит от драйвера: 3306 у MySQL, 5432 у
-        // PostgreSQL. Без этого запись shard-1:host::db молча уходит на
-        // чужой порт.
+        // the default port depends on the driver: 3306 for MySQL, 5432 for
+        // PostgreSQL. without this a shard-1:host::db entry silently goes to
+        // the wrong port
         $driver = (string) self::env('DB_SHARD_DRIVER', 'mysql');
         $defaultPort = (string) self::env('DB_PORT', $driver === 'pgsql' ? '5432' : '3306');
 

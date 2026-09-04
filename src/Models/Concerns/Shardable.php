@@ -115,6 +115,10 @@ trait Shardable
      * $this>` failed static analysis, which forced consumers either to widen
      * their docblocks and lose the type or to lower the analysis level.
      *
+     * Only `@return` is declared here on purpose. A `@phpstan-return` next to
+     * it wins over `@return` in PHPStan, so a hardcoded `Model` there silently
+     * cancels the template and brings the original problem back.
+     *
      * @template TRelatedModel of Model
      *
      * @param class-string<TRelatedModel> $related
@@ -122,7 +126,6 @@ trait Shardable
      * @param string|null $ownerKey
      * @param string|null $relation
      * @return ShardBelongsTo<TRelatedModel, $this>
-     * @phpstan-return ShardBelongsTo<Model, $this>
      */
     public function belongsTo($related, $foreignKey = null, $ownerKey = null, $relation = null)
     {
@@ -138,13 +141,20 @@ trait Shardable
 
         $ownerKey = $ownerKey ?: $instance->getKeyName();
 
-        return new ShardBelongsTo(
+        // newRelatedInstance() is declared as returning plain Model, so type
+        // inference does not carry TRelatedModel through newQuery() and the
+        // relation collapses to ShardBelongsTo<Model, $this>. The relation
+        // class is picked from $related, so the type is known for certain here.
+        /** @var ShardBelongsTo<TRelatedModel, $this> $shardBelongsTo */
+        $shardBelongsTo = new ShardBelongsTo(
             $instance->newQuery(),
             $this,
             $foreignKey,
             $ownerKey,
             $relation
         );
+
+        return $shardBelongsTo;
     }
 
     /**
