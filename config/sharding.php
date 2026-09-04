@@ -46,6 +46,22 @@ return [
             'sequence' => Allnetru\Sharding\IdGenerators\TableSequenceStrategy::class,
         ],
         'sequence_table' => 'shard_sequences',
+
+        /*
+        | Snowflake worker identity, 0..1023. Each process that mints ids must
+        | have its own value: the sequence counter is per process, so two
+        | processes sharing a worker id share a counter space and can collide.
+        | When unset the value is derived from hostname and pid, which is
+        | adequate for a single node but is a fallback, not a guarantee.
+        */
+        'worker_id' => env('SHARDING_WORKER_ID'),
+
+        /*
+        | Snowflake epoch in milliseconds. Forty one bits cover about 69 years
+        | from it. Changing the epoch on a populated database reorders ids, so
+        | treat it as fixed once data exists.
+        */
+        'epoch_ms' => env('SHARDING_EPOCH_MS', 1577836800000),
         // 'meta_connection' => 'mysql',
     ],
 

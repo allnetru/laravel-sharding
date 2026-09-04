@@ -185,7 +185,29 @@ Then register the table inside `config/sharding.php`, select a strategy (`hash`,
 
 ### ID generation
 
-The default `snowflake` generator creates sortable 64-bit identifiers. You can switch the global default or override per table to use a database-backed `sequence` generator or any other configured strategy.
+The default `snowflake` generator creates sortable 64-bit identifiers laid out
+as `41 bits timestamp | 10 bits worker | 12 bits sequence`. You can switch the
+global default or override per table to use a database-backed `sequence`
+generator or any other configured strategy.
+
+**Give every process that mints ids its own `worker_id`.** The sequence counter
+is per process, so two processes sharing a worker id share a counter space and
+can produce the same identifier. On one shard that is a primary key violation;
+across shards it is a silent duplicate that later breaks `find()` and
+rebalancing.
+
+```dotenv
+# distinct per container, per app server, per queue worker host
+SHARDING_WORKER_ID=1
+```
+
+Valid range is 0 to 1023. When the option is unset the worker id is derived
+from the hostname and the process id, which is adequate for a single node but
+is a fallback, not a guarantee.
+
+The epoch defaults to 2020-01-01 and 41 bits cover about 69 years from it.
+Changing `SHARDING_EPOCH_MS` on a populated database reorders identifiers, so
+treat it as fixed once data exists.
 
 ### Grouping related tables
 
