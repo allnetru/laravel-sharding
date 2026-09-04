@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.3.0 - 2026-09-04
+
+### What's Changed
+
+* chore: update CHANGELOG for v0.2.1 by @allnetru in https://github.com/allnetru/laravel-sharding/pull/41
+* Bump the composer group across 1 directory with 9 updates by @dependabot[bot] in https://github.com/allnetru/laravel-sharding/pull/40
+* fix: Snowflake identifiers could collide by @allnetru in https://github.com/allnetru/laravel-sharding/pull/42
+
+**Full Changelog**: https://github.com/allnetru/laravel-sharding/compare/v0.2.1...v0.3.0
+
 ## Unreleased
 
 ### Fixed
