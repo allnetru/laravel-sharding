@@ -219,7 +219,23 @@ Group tables so records that belong together end up on the same shard:
 ],
 ```
 
-When models belong to a group they reuse the shard selected for the group's primary table (for example, `users`).
+When models belong to a group they reuse the shard selected for the group's
+primary table (for example, `users`).
+
+Colocation needs three things together, and missing the third is the common
+mistake because nothing fails loudly:
+
+1. the entry in `groups`, with the owning table listed first;
+2. `'group' => 'user_data'` in the table's own configuration;
+3. `protected string $shardKey = 'user_id';` on the child model.
+
+Without the third the child is hashed by its own primary key and lands on an
+arbitrary shard, so the parent and its children end up apart while everything
+appears to work.
+
+A child whose shard key is not its primary key must not use an auto-incrementing
+primary key either: two shards would hand out the same sequence values. Declare
+`public $incrementing = false;` and the package generates the key for you.
 
 ### Working with data
 

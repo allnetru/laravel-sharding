@@ -79,6 +79,27 @@ deployment with more than one process minting ids.
 * Tests covering driver awareness of the generated connections, including that
   MySQL remains the default and keeps its keys.
 
+## Unreleased
+
+### Fixed
+
+* **Colocation by a non-primary shard key could not insert at all.** When a
+  model declared `$shardKey` pointing at another column, which is the shape the
+  README documents for grouping related tables, the `creating` hook filled only
+  the shard key. A non-incrementing primary key stayed null and the insert
+  failed, so the documented shape did not work. The primary key is now
+  generated through the configured ID generator when it is not
+  auto-incrementing and has no value. Auto-incrementing keys are still left to
+  the database, and an explicitly assigned key is never overwritten.
+
+### Changed
+
+* README spells out that colocation needs three things together, not two: the
+  `groups` entry, the table's `group` key and `$shardKey` on the model. Missing
+  the third silently scatters children across shards. It also notes that such a
+  child must declare `public $incrementing = false;`, because two shards would
+  otherwise hand out the same sequence values.
+
 ## v0.2.1 - 2026-08-16
 
 ### What's Changed
