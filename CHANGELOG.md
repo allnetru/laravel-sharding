@@ -47,6 +47,28 @@ timestamp last until 2089.
 Set `SHARDING_WORKER_ID` per process before relying on the generator in a
 deployment with more than one process minting ids.
 
+## Unreleased
+
+### Fixed
+
+* **Shard connections could not reach PostgreSQL.** The base configuration
+  applied MySQL defaults to every driver, so a `pgsql` shard was built with
+  `charset` set to `utf8mb4` and PostgreSQL refused the connection outright
+  with `invalid value for parameter "client_encoding"`. The configuration is
+  now driver aware: PostgreSQL shards carry `charset`, `search_path` and
+  `sslmode`, and the MySQL only keys `collation`, `strict`, `engine` and
+  `options` are not emitted for them at all.
+* **The default shard port was always 3306.** A definition with the port
+  omitted, `shard-1:host::database`, silently pointed a PostgreSQL shard at the
+  MySQL port. The default now follows the driver: 5432 for `pgsql`, 3306
+  otherwise.
+
+### Added
+
+* `DB_SEARCH_PATH` and `DB_SSLMODE` are honoured for PostgreSQL shards.
+* Tests covering driver awareness of the generated connections, including that
+  MySQL remains the default and keeps its keys.
+
 ## v0.2.1 - 2026-08-16
 
 ### What's Changed
