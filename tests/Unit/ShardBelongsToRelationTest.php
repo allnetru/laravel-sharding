@@ -93,7 +93,9 @@ class ShardBelongsToRelationTest extends TestCase
 
         $this->assertIsString($docblock);
         $this->assertStringContainsString('@template TRelatedModel of Model', $docblock);
-        $this->assertStringContainsString('@return ShardBelongsTo<TRelatedModel, $this>', $docblock);
+        // BelongsTo, not ShardBelongsTo: a global related model gets the plain
+        // relation, so the declared type has to cover both
+        $this->assertStringContainsString('@return BelongsTo<TRelatedModel, $this>', $docblock);
         // matched as a tag at the start of a line: the prose above mentions the
         // word on purpose, so a plain substring search would catch itself
         $this->assertDoesNotMatchRegularExpression('/^\s*\*\s*@phpstan-return/m', $docblock);

@@ -2,6 +2,7 @@
 
 namespace Allnetru\Sharding;
 
+use Allnetru\Sharding\Models\Concerns\Shardable;
 use Allnetru\Sharding\Strategies\Strategy;
 use Illuminate\Database\Eloquent\Model;
 use RuntimeException;
@@ -92,6 +93,44 @@ class ShardingManager
         $tableConfig['table'] = $table;
 
         return [$strategy, $tableConfig];
+    }
+
+    /**
+     * Determine whether the given model or table is sharded at all.
+     *
+     * Needed because a relation from a sharded model can point at a global
+     * table: reference data lives on the default connection, and routing such
+     * a query to a shard sends it where the table does not exist. Without this
+     * check `strategyFor()` cannot tell the two apart, since it silently falls
+     * back to the default strategy for unknown tables.
+     *
+     * The trait is the signal rather than the config: a model that uses
+     * Shardable is sharded by definition, and a table can be missing from the
+     * config by mistake, which is exactly the case this check must not treat
+     * as global.
+     *
+     * @param Model|string $model
+     * @return bool
+     */
+    public function isShardable(Model|string $model): bool
+    {
+        if ($model instanceof Model) {
+            return in_array(Shardable::class, class_uses_recursive($model), true);
+        }
+
+        $tables = $this->config['tables'] ?? [];
+
+        if (array_key_exists($model, $tables)) {
+            return true;
+        }
+
+        foreach ($this->config['groups'] ?? [] as $group) {
+            if (in_array($model, (array) $group, true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
