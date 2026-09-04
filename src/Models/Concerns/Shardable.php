@@ -109,11 +109,19 @@ trait Shardable
     /**
      * Define an inverse one-to-one or many relation that resolves the parent's shard.
      *
-     * @param class-string<Model> $related
+     * The related model is templated so a model can narrow the return type in
+     * its own docblock. Without it every relation resolved to
+     * `BelongsTo<Model, $this>`, and a model declaring `BelongsTo<Tenant,
+     * $this>` failed static analysis, which forced consumers either to widen
+     * their docblocks and lose the type or to lower the analysis level.
+     *
+     * @template TRelatedModel of Model
+     *
+     * @param class-string<TRelatedModel> $related
      * @param string|null $foreignKey
      * @param string|null $ownerKey
      * @param string|null $relation
-     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo<Model, $this>
+     * @return ShardBelongsTo<TRelatedModel, $this>
      * @phpstan-return ShardBelongsTo<Model, $this>
      */
     public function belongsTo($related, $foreignKey = null, $ownerKey = null, $relation = null)

@@ -118,6 +118,17 @@ deployment with more than one process minting ids.
   child must declare `public $incrementing = false;`, because two shards would
   otherwise hand out the same sequence values.
 
+## Unreleased
+
+### Fixed
+
+* **`belongsTo` on a shardable model lost the related type.** The override
+  declared `BelongsTo<Model, $this>`, so a model narrowing its own docblock to
+  `BelongsTo<Tenant, $this>` failed static analysis. Consumers had to either
+  widen their docblocks and lose the type or lower the analysis level. The
+  related model is now templated and the return type is
+  `ShardBelongsTo<TRelatedModel, $this>`.
+
 ## v0.2.1 - 2026-08-16
 
 ### What's Changed
