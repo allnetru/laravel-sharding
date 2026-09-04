@@ -17,6 +17,7 @@ use Allnetru\Sharding\ShardBuilder;
 use Allnetru\Sharding\ShardingManager;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 
@@ -75,7 +76,7 @@ trait Shardable
             $model->replicaConnections = array_slice($connections, 1);
             $model->setAttribute('is_replica', false);
 
-            // When the shard key is a column other than the primary key, which
+            // when the shard key is a column other than the primary key, which
             // is how colocation is set up, the block above filled only the
             // shard key. The primary key would stay null and the insert would
             // fail, so it is generated here. Auto-incrementing keys are left
@@ -125,7 +126,7 @@ trait Shardable
      * @param string|null $foreignKey
      * @param string|null $ownerKey
      * @param string|null $relation
-     * @return ShardBelongsTo<TRelatedModel, $this>
+     * @return BelongsTo<TRelatedModel, $this>
      */
     public function belongsTo($related, $foreignKey = null, $ownerKey = null, $relation = null)
     {
@@ -141,10 +142,25 @@ trait Shardable
 
         $ownerKey = $ownerKey ?: $instance->getKeyName();
 
+        // a global related model gets the plain relation: ShardBelongsTo would
+        // resolve a shard for a table that lives on the default connection
+        if (!app(ShardingManager::class)->isShardable($instance)) {
+            /** @var BelongsTo<TRelatedModel, $this> $belongsTo */
+            $belongsTo = new BelongsTo(
+                $instance->newQuery(),
+                $this,
+                $foreignKey,
+                $ownerKey,
+                $relation
+            );
+
+            return $belongsTo;
+        }
+
         // newRelatedInstance() is declared as returning plain Model, so type
         // inference does not carry TRelatedModel through newQuery() and the
-        // relation collapses to ShardBelongsTo<Model, $this>. The relation
-        // class is picked from $related, so the type is known for certain here.
+        // relation collapses to ShardBelongsTo<Model, $this>. the relation
+        // class is picked from $related, so the type is known for certain here
         /** @var ShardBelongsTo<TRelatedModel, $this> $shardBelongsTo */
         $shardBelongsTo = new ShardBelongsTo(
             $instance->newQuery(),
@@ -155,6 +171,26 @@ trait Shardable
         );
 
         return $shardBelongsTo;
+    }
+
+    /**
+     * @inheritDoc
+     *
+     * Eloquent copies the parent connection into a related model that has none
+     * of its own. For a sharded parent that means every relation to a global
+     * table is queried on a shard, where reference tables do not exist. The
+     * connection is therefore propagated only to related models that are
+     * sharded themselves.
+     */
+    protected function newRelatedInstance($class)
+    {
+        $instance = new $class();
+
+        if (!$instance->getConnectionName() && app(ShardingManager::class)->isShardable($instance)) {
+            $instance->setConnection($this->getConnectionName());
+        }
+
+        return $instance;
     }
 
     /**

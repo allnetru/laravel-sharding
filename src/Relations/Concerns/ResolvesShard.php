@@ -19,7 +19,18 @@ trait ResolvesShard
      */
     protected function switchConnection(mixed $key): void
     {
-        $connection = app(ShardingManager::class)->connectionFor($this->related, $key)[0];
+        $manager = app(ShardingManager::class);
+
+        // a relation from a sharded model can point at a global table:
+        // reference data lives on the default connection. Routing such a query
+        // to a shard sends it where the table does not exist, and the failure
+        // is confusing rather than obvious, because the strategy silently
+        // treats the unknown table as shardable and looks for its slots.
+        if (!$manager->isShardable($this->related)) {
+            return;
+        }
+
+        $connection = $manager->connectionFor($this->related, $key)[0];
 
         if ($this instanceof HasOneOrManyThrough) {
             $this->throughParent->setConnection($connection);
