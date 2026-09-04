@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.3.5 - 2026-09-04
+
+### What's Changed
+
+* chore: update CHANGELOG for v0.3.3 by @allnetru in https://github.com/allnetru/laravel-sharding/pull/49
+* chore: update CHANGELOG for v0.3.4 by @allnetru in https://github.com/allnetru/laravel-sharding/pull/51
+* fix: belongsTo generics fix from v0.3.3 was cancelled by its own docblock by @allnetru in https://github.com/allnetru/laravel-sharding/pull/50
+* fix: relations from a sharded model to a global table went to a shard by @allnetru in https://github.com/allnetru/laravel-sharding/pull/53
+
+**Full Changelog**: https://github.com/allnetru/laravel-sharding/compare/v0.3.3...v0.3.5
+
 ## v0.3.4 - 2026-09-04
 
 ### What's Changed
