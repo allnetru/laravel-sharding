@@ -74,6 +74,17 @@ trait Shardable
             $model->setConnection($connections[0]);
             $model->replicaConnections = array_slice($connections, 1);
             $model->setAttribute('is_replica', false);
+
+            // When the shard key is a column other than the primary key, which
+            // is how colocation is set up, the block above filled only the
+            // shard key. The primary key would stay null and the insert would
+            // fail, so it is generated here. Auto-incrementing keys are left
+            // to the database.
+            $primaryKey = $model->getKeyName();
+
+            if ($primaryKey !== $keyName && !$model->getIncrementing() && !$model->getKey()) {
+                $model->setAttribute($primaryKey, app(IdGenerator::class)->generate($model));
+            }
         });
 
         static::created(function ($model): void {
