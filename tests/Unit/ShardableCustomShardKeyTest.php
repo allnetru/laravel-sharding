@@ -126,9 +126,9 @@ class ShardableCustomShardKeyTest extends TestCase
             }
         });
 
-        // Ключ шардирования не задан, поэтому генератор вызывается на него.
-        // Первичный ключ автоинкрементный, поэтому на него не должен: всего
-        // ожидается ровно один вызов.
+        // the shard key is not set, so the generator is called for it. the
+        // primary key is auto-incrementing, so it must not be: exactly one
+        // call is expected in total
         $model = new NoteWithAutoIncrement();
         $model->save();
 

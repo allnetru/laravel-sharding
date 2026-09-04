@@ -141,10 +141,10 @@ trait Shardable
 
         $ownerKey = $ownerKey ?: $instance->getKeyName();
 
-        // newRelatedInstance() отдаёт просто Model, поэтому вывод типов не
-        // протаскивает TRelatedModel через newQuery() и связь схлопывается до
-        // ShardBelongsTo<Model, $this>. Класс связи выбран по $related, так
-        // что здесь тип известен точно.
+        // newRelatedInstance() is declared as returning plain Model, so type
+        // inference does not carry TRelatedModel through newQuery() and the
+        // relation collapses to ShardBelongsTo<Model, $this>. The relation
+        // class is picked from $related, so the type is known for certain here.
         /** @var ShardBelongsTo<TRelatedModel, $this> $shardBelongsTo */
         $shardBelongsTo = new ShardBelongsTo(
             $instance->newQuery(),

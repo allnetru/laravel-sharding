@@ -94,8 +94,8 @@ class ShardBelongsToRelationTest extends TestCase
         $this->assertIsString($docblock);
         $this->assertStringContainsString('@template TRelatedModel of Model', $docblock);
         $this->assertStringContainsString('@return ShardBelongsTo<TRelatedModel, $this>', $docblock);
-        // Проверяется именно тег в начале строки: в прозе выше это слово
-        // упоминается по делу, и простой поиск подстроки ловил бы сам себя.
+        // matched as a tag at the start of a line: the prose above mentions the
+        // word on purpose, so a plain substring search would catch itself
         $this->assertDoesNotMatchRegularExpression('/^\s*\*\s*@phpstan-return/m', $docblock);
     }
 }
