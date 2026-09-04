@@ -80,6 +80,24 @@ class ShardBelongsToRelationTest extends TestCase
 
         $this->assertNull($user->organization);
     }
+
+    /**
+     * The templated return type is a documented part of the contract: consumers
+     * narrow it in their own models. A `@phpstan-return` alongside `@return`
+     * wins in PHPStan, so one hardcoding `Model` would silently disable the
+     * template while every test here still passed.
+     */
+    public function testBelongsToDocblockKeepsTheRelatedModelTemplated(): void
+    {
+        $docblock = (new \ReflectionMethod(Shardable::class, 'belongsTo'))->getDocComment();
+
+        $this->assertIsString($docblock);
+        $this->assertStringContainsString('@template TRelatedModel of Model', $docblock);
+        $this->assertStringContainsString('@return ShardBelongsTo<TRelatedModel, $this>', $docblock);
+        // Проверяется именно тег в начале строки: в прозе выше это слово
+        // упоминается по делу, и простой поиск подстроки ловил бы сам себя.
+        $this->assertDoesNotMatchRegularExpression('/^\s*\*\s*@phpstan-return/m', $docblock);
+    }
 }
 
 class TestOrganization extends Model
