@@ -18,10 +18,15 @@ class ShardMorphToMany extends MorphToMany
     /** @inheritDoc */
     public function addConstraints()
     {
-        // no column of the related table is constrained here — the pivot is
-        // what carries the parent's key — so the shard is knowable only when
-        // parent and related share a shard column
-        $this->resolveShardConnection($this->parent, null, null);
+        // guarded, because eager loading calls addEagerConstraints instead
+        // and must keep fanning out: it constrains many parents at once and
+        // they may live on different shards
+        if (static::$constraints) {
+            // no column of the related table is constrained here — the pivot
+            // is what carries the parent's key — so the shard is knowable only
+            // when parent and related share a shard column
+            $this->resolveShardConnection($this->parent, null, null);
+        }
 
         parent::addConstraints();
     }

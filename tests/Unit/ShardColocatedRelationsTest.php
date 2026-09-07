@@ -82,6 +82,19 @@ class ShardColocatedRelationsTest extends TestCase
                 $table->unsignedBigInteger('user_id');
                 $table->boolean('is_replica')->default(false);
             });
+
+            Schema::connection($connection)->create('co_profile_notes', function (Blueprint $table): void {
+                $table->unsignedBigInteger('id')->primary();
+                // colocated with the user, like the profile, because a
+                // through relation joins the intermediate table to the related
+                // one and a join cannot cross connections. Sharding the note
+                // by profile_id instead would put it on hash(profile.id) while
+                // the profile sits on hash(user.id) — the same shard only by
+                // luck, which is a flaky test rather than a fixture
+                $table->unsignedBigInteger('user_id');
+                $table->unsignedBigInteger('profile_id');
+                $table->boolean('is_replica')->default(false);
+            });
         }
     }
 
@@ -274,6 +287,129 @@ class ShardColocatedRelationsTest extends TestCase
     }
 
     /**
+     * A foreign key that crosses shard-key values is not found, by design.
+     *
+     * This is the precondition of the second colocation shape, pinned as a
+     * test so it reads as decided rather than as an accident. Two tables
+     * sharded by `tenant_id` are colocated on the understanding that a row
+     * points at a row of the *same* tenant; that is what colocation is. A
+     * foreign key to another tenant's row points at a different shard by
+     * construction, and nothing here can tell that case from the ordinary one
+     * — both models are in one group and both name `tenant_id`.
+     *
+     * Before v0.3.6 the fan-out masked it and answered anyway. It no longer
+     * does. A relation that has to cross shard-key values cannot be
+     * colocated, and belongs on a table that is not.
+     *
+     * @return void
+     */
+    public function testAForeignKeyAcrossShardKeyValuesIsNotFound(): void
+    {
+        $settlement = $this->settlementWithDisagreeingKeys();
+
+        // deliberately another tenant's parcel, pointing back at this
+        // settlement, and a tenant whose shard is the other one — the fixture
+        // means nothing while both rows sit together
+        $parcel = new CoParcel();
+        $parcel->tenant_id = $this->tenantOnAnotherShard((int) $settlement->tenant_id);
+        $parcel->settlement_id = $settlement->getKey();
+        $parcel->save();
+
+        $this->assertNotSame(
+            $settlement->getConnectionName(),
+            $parcel->getConnectionName(),
+            'The fixture only means anything while the two rows are on different shards.',
+        );
+
+        $fresh = CoSettlement::on($settlement->getConnectionName())
+            ->where('id', $settlement->getKey())
+            ->first();
+
+        $this->assertCount(0, $fresh->parcels);
+        $this->assertSame(0, $fresh->parcels()->count());
+    }
+
+    /**
+     * A qualified owner key still lands in the exact branch.
+     *
+     * `belongsTo(X::class, 'x_id', 'xs.id')` is legal Eloquent, and the
+     * comparison against the related model's shard key is made on the last
+     * segment for exactly that reason. Without the normalisation `'xs.id'`
+     * would not equal `'id'`, the relation would fall through to the
+     * shared-column branch — the one with a precondition — and be routed by a
+     * column that means something else.
+     *
+     * @return void
+     */
+    public function testAQualifiedOwnerKeyResolvesExactly(): void
+    {
+        $user = new CoUser();
+        $user->save();
+
+        $profile = new CoProfile();
+        $profile->user_id = $user->getKey();
+        $profile->save();
+
+        $fresh = CoProfile::on($profile->getConnectionName())->where('id', $profile->getKey())->first();
+
+        $connections = $this->connectionsUsed(function () use ($fresh, $user): void {
+            $owner = $fresh->qualifiedUser;
+
+            $this->assertNotNull($owner);
+            $this->assertSame($user->getKey(), $owner->getKey());
+        });
+
+        $this->assertSame([$user->getConnectionName()], $connections);
+    }
+
+    /**
+     * hasManyThrough works at all.
+     *
+     * It did not before v0.3.6: `ShardHasManyThrough::addConstraints()` called
+     * `getParentKey()`, which `HasManyThrough` does not define — only
+     * `HasOneThrough` does — so every use threw BadMethodCallException. A
+     * `@method` annotation on the class kept static analysis quiet about it.
+     * The commit that changed how the shard is resolved removed the call and
+     * repaired the relation without knowing it, which is exactly the kind of
+     * fix that needs a test or it regresses.
+     *
+     * **On one shard, deliberately.** A through relation joins the
+     * intermediate table to the related one, and a join cannot cross
+     * connections: across two shards the relation answers only from the shard
+     * where both rows happen to land, so a two-shard fixture is a coin toss
+     * rather than a test — which is what the first version of this was. What
+     * is being asserted is that the relation resolves; whether a through
+     * relation can be sharded at all is a separate question the package has
+     * not answered.
+     *
+     * @return void
+     */
+    public function testHasManyThroughResolves(): void
+    {
+        config(['sharding.connections' => ['shard_1' => ['weight' => 1]]]);
+        app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
+
+        $user = new CoUser();
+        $user->save();
+
+        $profile = new CoProfile();
+        $profile->user_id = $user->getKey();
+        $profile->save();
+
+        $note = new CoProfileNote();
+        $note->user_id = $user->getKey();
+        $note->profile_id = $profile->getKey();
+        $note->save();
+
+        $fresh = CoUser::on($user->getConnectionName())->where('id', $user->getKey())->first();
+
+        $notes = $fresh->profileNotes;
+
+        $this->assertCount(1, $notes);
+        $this->assertSame($note->getKey(), $notes->first()->getKey());
+    }
+
+    /**
      * A settlement whose tenant shard is not the shard its own id hashes to.
      *
      * The whole point of the fixture. With the two keys agreeing, the old
@@ -300,6 +436,29 @@ class ShardColocatedRelationsTest extends TestCase
         }
 
         $this->fail('No tenant produced disagreeing shard keys, so the fixture proves nothing.');
+    }
+
+    /**
+     * A tenant whose parcels land on a shard other than this tenant's.
+     *
+     * @param int $tenantId The tenant to differ from.
+     *
+     * @return int
+     */
+    protected function tenantOnAnotherShard(int $tenantId): int
+    {
+        /** @var ShardingManager $manager */
+        $manager = app(ShardingManager::class);
+
+        $mine = $manager->connectionFor(new CoParcel(), $tenantId)[0];
+
+        for ($candidate = $tenantId + 1; $candidate < $tenantId + 500; $candidate++) {
+            if ($manager->connectionFor(new CoParcel(), $candidate)[0] !== $mine) {
+                return $candidate;
+            }
+        }
+
+        $this->fail('No tenant landed on another shard, so the fixture proves nothing.');
     }
 
     /**
@@ -409,6 +568,14 @@ class CoUser extends Model
     {
         return $this->hasMany(CoProfile::class, 'user_id', 'id');
     }
+
+    /**
+     * @return \Illuminate\Database\Eloquent\Relations\HasManyThrough<CoProfileNote, CoProfile, $this>
+     */
+    public function profileNotes()
+    {
+        return $this->hasManyThrough(CoProfileNote::class, CoProfile::class, 'user_id', 'profile_id', 'id', 'id');
+    }
 }
 
 class CoProfile extends Model
@@ -428,4 +595,26 @@ class CoProfile extends Model
     {
         return $this->belongsTo(CoUser::class, 'user_id', 'id');
     }
+
+    /**
+     * The same relation with the owner key written out qualified, which is
+     * legal and which the comparison has to survive.
+     *
+     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo<CoUser, $this>
+     */
+    public function qualifiedUser()
+    {
+        return $this->belongsTo(CoUser::class, 'user_id', 'co_users.id');
+    }
+}
+
+class CoProfileNote extends Model
+{
+    use Shardable;
+
+    public $incrementing = false;
+    public $timestamps = false;
+    protected $table = 'co_profile_notes';
+    protected string $shardKey = 'user_id';
+    protected $guarded = [];
 }

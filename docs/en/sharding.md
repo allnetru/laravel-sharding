@@ -225,10 +225,20 @@ Anything else cannot be known from where the relation stands. A table sharded
 by its own primary key cannot be located from a parent that only holds a
 foreign key pointing the other way, and the parent's own `id` is its identity
 rather than the child's. In that case the connection is left alone and
-`ShardBuilder` fans the query out across every shard and merges the results:
-slower, and always right.
+`ShardBuilder` fans the query out across every shard.
 
-Two consequences worth knowing:
+**The second case carries a precondition, and it is the one colocation already
+is:** the two rows must share the shard key's *value*, not merely the column's
+name. A foreign key from one tenant's row to another tenant's row points at a
+different shard by construction, and the relation pins to the source's shard,
+so the target is not found. Nothing here can tell that case from the ordinary
+one — both models sit in one group and both name the same shard key — and
+before v0.3.6 the fan-out masked it and answered anyway. A relation that has to
+cross shard-key values cannot be colocated, and belongs on a table that is not.
+`ShardColocatedRelationsTest` pins the behaviour so it reads as decided rather
+than as an accident.
+
+Three more consequences worth knowing:
 
 - **Colocation is what buys the single-shard read.** Without it, every lazy
   read through a relation is a fan-out. That is correct but costs one query per
@@ -236,3 +246,18 @@ Two consequences worth knowing:
 - **Eager loading always fans out.** `with('parcels')` constrains many parents
   at once and they may live on different shards, so there is no single
   connection to pin. Only lazy loading of one parent can be narrowed.
+- **A through relation cannot be sharded at all.** `hasOneThrough` and
+  `hasManyThrough` join the intermediate table to the related one, and a join
+  cannot cross connections. Across two shards such a relation answers only from
+  the shard where both rows happen to land — which is to say, by luck. Colocate
+  all three tables on the same shard key, or keep them on one connection.
+- **The fan-out is not a guarantee of correctness — only of reads.**
+  `ShardBuilder` overrides `get`, `chunk`, `chunkById`, `paginate`,
+  `firstOrCreate` and `updateOrCreate`, and nothing else. On a relation that
+  could not be pinned, `count()`, `exists()`, `sum()`, `pluck()`, `update()`
+  and `delete()` still run on one connection — the parent's — and answer for a
+  fraction of the rows. With forty children split evenly across two shards,
+  `get()` returns forty while `count()` returns twenty and `delete()` removes
+  twenty and leaves twenty orphans. That is the second defect in this list and
+  it is not fixed; on a colocated relation, which is pinned, the same calls are
+  correct because the one shard is the right one.
