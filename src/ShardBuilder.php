@@ -49,6 +49,29 @@ class ShardBuilder extends EloquentBuilder
     }
 
     /**
+     * Pin the builder to one shard connection.
+     *
+     * What makes colocation pay off. Setting the model's connection alone does
+     * nothing here: every fan-out method checks $singleConnection first, so a
+     * builder whose connection was chosen but not pinned still reads every
+     * shard and merges. Relations call this once they know the shard for
+     * certain; when they do not know it they leave the builder alone and the
+     * fan-out answers.
+     *
+     * @param string $connection
+     * @return static
+     */
+    public function onShardConnection(string $connection): static
+    {
+        $model = $this->getModel();
+        $model->setConnection($connection);
+        $this->getQuery()->connection = $model->getConnection();
+        $this->singleConnection = true;
+
+        return $this;
+    }
+
+    /**
      * @inheritdoc
      */
     public function get($columns = ['*'])

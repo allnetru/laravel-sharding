@@ -20,11 +20,10 @@ class ShardHasOneThrough extends HasOneThrough
     /** @inheritDoc */
     public function addConstraints()
     {
-        $parentKey = $this->getParentKey();
+        // the intermediate table carries the far parent's key, not the related
+        // table, so only a shared shard column can locate the related rows
+        $this->resolveShardConnection($this->farParent, null, null);
 
-        if ($parentKey !== null) {
-            $this->switchConnection($parentKey);
-        }
         parent::addConstraints();
     }
 }
