@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.3.6 - 2026-09-07
+
+### What's Changed
+
+* fix: relations resolved the shard by the joining key, not by the shard key by @allnetru in https://github.com/allnetru/laravel-sharding/pull/55
+
+### Fixed
+
+* **Every relation resolved the shard from the joining key instead of the shard key.** Each class in `src/Relations/` picked its connection from whichever column joined the two rows. That is the shard key only when a table is sharded by its own primary key — under colocation it is a different column, so the query went to a shard chosen by an unrelated number.
+  
+  Reads survived it and that is why it went unnoticed: the chosen connection was set on the model and then ignored, because nothing marked the builder as single-shard, so `ShardBuilder` fanned out and merged anyway. The methods it does not override had no such luck. Measured on two shards with two tables colocated by `tenant_id`, for a parent whose two keys hash apart, `count()` returned `0` over an existing row and `exists()` returned `false`.
+  
+  So colocation bought nothing on relations, and aggregates through a relation were silently wrong.
+  
+* **The rule now lives in one place,** `ResolvesShard::shardKeyValue()`. The shard of the related table is decided by that table's own shard key, and a relation can name its value in exactly two cases — the two shapes colocation takes: the child declares the parent's key as its shard key (`user_profiles` sharded by `user_id`), so the column the relation constrains *is* the shard key; or parent and child share a shard column, which the row in hand carries. Anything else is unknowable from where the relation stands, and the connection is left alone so the fan-out answers: slower, and always right.
+  
+* **`belongsToMany`, `morphToMany` and the through relations** constrain no column of the related table — the pivot or the intermediate carries the parent's key — so they narrow only on a shared shard column and otherwise fan out as before.
+  
+* `addEagerConstraints` is deliberately untouched: it constrains many parents at once, they may live on different shards, and there is no single connection to pin. Eager loading therefore still fans out, which is correct.
+  
+
+### Added
+
+* `ShardBuilder::onShardConnection()` pins a builder to one shard. This is the half that makes colocation pay off — choosing a connection was never enough on its own, since every fan-out method checks `$singleConnection` first.
+  
+* `tests/Unit/ShardColocatedRelationsTest.php`, built on a topology where the two keys deliberately disagree. Five of its six cases fail without the fix. The sixth asserts that a child sharded by its own key is still found by fanning out, so the fix cannot trade wrong aggregates for missing rows. `ShardHasRelationsTest` passed with the bug in place, because the hashes of its two keys happen to land on the same shard.
+  
+
+### Changed
+
+* `docs/en/sharding.md` no longer says relations resolve the shard "based on the local or foreign key", and spells out which cases narrow to one shard, which fan out, and why eager loading always does.
+
+**Full Changelog**: https://github.com/allnetru/laravel-sharding/compare/v0.3.5...v0.3.6
+
 ## v0.3.5 - 2026-09-04
 
 ### What's Changed
