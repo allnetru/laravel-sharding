@@ -6,6 +6,7 @@ use Allnetru\Sharding\ShardBuilder;
 use Allnetru\Sharding\ShardingManager;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasOneOrManyThrough;
+use Illuminate\Support\Str;
 
 /**
  * @internal
@@ -90,6 +91,19 @@ trait ResolvesShard
      * not the related row's, which is exactly the substitution that made this
      * wrong before.
      *
+     * **The second shape carries a precondition, and it is the precondition
+     * colocation already is:** the two rows must share the shard key's *value*,
+     * not merely the column's name. A foreign key from one tenant's row to
+     * another tenant's row is outside the design — the rows are on different
+     * shards by construction — and this pins the query to the source's shard,
+     * so the target is not found. Before v0.3.6 the fan-out masked that and
+     * answered anyway; it no longer does, and there is no way to tell the two
+     * cases apart from here, because both models are in one group and both
+     * name the same shard key. `ShardColocatedRelationsTest` pins the
+     * behaviour so it reads as decided rather than as an accident. A relation
+     * that has to cross shard-key values cannot be colocated, and belongs on a
+     * table that is not.
+     *
      * @param Model $source the row the relation is being resolved from
      * @param string|null $relatedColumn the column of the related table this relation constrains
      * @param mixed $relatedValue the value that column is constrained to
@@ -107,7 +121,17 @@ trait ResolvesShard
 
         $shardKey = $related->getShardKey();
 
-        if ($relatedColumn !== null && $relatedColumn === $shardKey) {
+        // the last segment, because a relation may be declared with a
+        // qualified key — belongsTo(X::class, 'x_id', 'xs.id') — and comparing
+        // 'xs.id' against 'id' would fail silently and fall through to the
+        // shared-column branch, which is the one with a precondition. The
+        // has-relations already pass an unqualified name; normalising here
+        // covers the ones that do not
+        $relatedColumn = $relatedColumn === null
+            ? null
+            : Str::afterLast($relatedColumn, '.');
+
+        if ($relatedColumn === $shardKey) {
             return $relatedValue;
         }
 
