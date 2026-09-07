@@ -85,6 +85,13 @@ class ShardColocatedRelationsTest extends TestCase
 
             Schema::connection($connection)->create('co_profile_notes', function (Blueprint $table): void {
                 $table->unsignedBigInteger('id')->primary();
+                // colocated with the user, like the profile, because a
+                // through relation joins the intermediate table to the related
+                // one and a join cannot cross connections. Sharding the note
+                // by profile_id instead would put it on hash(profile.id) while
+                // the profile sits on hash(user.id) — the same shard only by
+                // luck, which is a flaky test rather than a fixture
+                $table->unsignedBigInteger('user_id');
                 $table->unsignedBigInteger('profile_id');
                 $table->boolean('is_replica')->default(false);
             });
@@ -366,10 +373,22 @@ class ShardColocatedRelationsTest extends TestCase
      * repaired the relation without knowing it, which is exactly the kind of
      * fix that needs a test or it regresses.
      *
+     * **On one shard, deliberately.** A through relation joins the
+     * intermediate table to the related one, and a join cannot cross
+     * connections: across two shards the relation answers only from the shard
+     * where both rows happen to land, so a two-shard fixture is a coin toss
+     * rather than a test — which is what the first version of this was. What
+     * is being asserted is that the relation resolves; whether a through
+     * relation can be sharded at all is a separate question the package has
+     * not answered.
+     *
      * @return void
      */
     public function testHasManyThroughResolves(): void
     {
+        config(['sharding.connections' => ['shard_1' => ['weight' => 1]]]);
+        app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
+
         $user = new CoUser();
         $user->save();
 
@@ -378,6 +397,7 @@ class ShardColocatedRelationsTest extends TestCase
         $profile->save();
 
         $note = new CoProfileNote();
+        $note->user_id = $user->getKey();
         $note->profile_id = $profile->getKey();
         $note->save();
 
@@ -595,6 +615,6 @@ class CoProfileNote extends Model
     public $incrementing = false;
     public $timestamps = false;
     protected $table = 'co_profile_notes';
-    protected string $shardKey = 'profile_id';
+    protected string $shardKey = 'user_id';
     protected $guarded = [];
 }

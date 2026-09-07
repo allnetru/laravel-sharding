@@ -246,6 +246,11 @@ Three more consequences worth knowing:
 - **Eager loading always fans out.** `with('parcels')` constrains many parents
   at once and they may live on different shards, so there is no single
   connection to pin. Only lazy loading of one parent can be narrowed.
+- **A through relation cannot be sharded at all.** `hasOneThrough` and
+  `hasManyThrough` join the intermediate table to the related one, and a join
+  cannot cross connections. Across two shards such a relation answers only from
+  the shard where both rows happen to land — which is to say, by luck. Colocate
+  all three tables on the same shard key, or keep them on one connection.
 - **The fan-out is not a guarantee of correctness — only of reads.**
   `ShardBuilder` overrides `get`, `chunk`, `chunkById`, `paginate`,
   `firstOrCreate` and `updateOrCreate`, and nothing else. On a relation that
