@@ -2,7 +2,7 @@
 
 namespace Allnetru\Sharding\Relations;
 
-use Allnetru\Sharding\ShardingManager;
+use Allnetru\Sharding\Relations\Concerns\ResolvesShard;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 
 /**
@@ -13,6 +13,8 @@ use Illuminate\Database\Eloquent\Relations\MorphTo;
  */
 class ShardMorphTo extends MorphTo
 {
+    use ResolvesShard;
+
     /** @inheritDoc */
     public function addConstraints()
     {
@@ -22,17 +24,18 @@ class ShardMorphTo extends MorphTo
 
             /** @var TRelatedModel $instance */
             $instance = $this->createModelByType($type);
-            $connection = app(ShardingManager::class)->connectionFor($instance, $foreignKey)[0];
 
-            $instance->setConnection($connection);
+            // the related model and the query are replaced before the shard is
+            // resolved, because resolving it reads both
             $this->related = $instance;
             /** @var \Illuminate\Database\Eloquent\Builder<TRelatedModel> $query */
             $query = $instance->newQuery();
-            $query->getModel()->setConnection($connection);
-            $query->getQuery()->connection = $query->getModel()->getConnection();
             $this->query = $query;
 
             $this->ownerKey = $this->ownerKey ?: $instance->getKeyName();
+
+            $this->resolveShardConnection($this->child, $this->ownerKey, $foreignKey);
+
             $this->query->where($this->getQualifiedOwnerKeyName(), '=', $foreignKey);
         }
     }

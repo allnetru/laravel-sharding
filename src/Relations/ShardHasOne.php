@@ -22,7 +22,9 @@ class ShardHasOne extends HasOne
             $parentKey = $this->getParentKey();
 
             if ($parentKey !== null) {
-                $this->switchConnection($parentKey);
+                // the children are pinned by their foreign key, so when that
+                // column is also their shard key the shard is known exactly
+                $this->resolveShardConnection($this->parent, $this->getForeignKeyName(), $parentKey);
             }
 
             parent::addConstraints();

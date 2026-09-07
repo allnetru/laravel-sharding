@@ -2,7 +2,7 @@
 
 namespace Allnetru\Sharding\Relations;
 
-use Allnetru\Sharding\ShardingManager;
+use Allnetru\Sharding\Relations\Concerns\ResolvesShard;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
@@ -15,6 +15,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class ShardBelongsTo extends BelongsTo
 {
+    use ResolvesShard;
+
     /** @inheritDoc */
     public function addConstraints()
     {
@@ -28,11 +30,11 @@ class ShardBelongsTo extends BelongsTo
                 return;
             }
 
-            $connection = app(ShardingManager::class)
-                ->connectionFor($this->related, $foreignKey)[0];
-
-            $this->query->getModel()->setConnection($connection);
-            $this->query->getQuery()->connection = $this->query->getModel()->getConnection();
+            // the owner is pinned by its owner key, which is its shard key
+            // whenever the table shards by its own identity. Under colocation
+            // it is not, and then the child's copy of the shard column is what
+            // locates it
+            $this->resolveShardConnection($this->child, $this->ownerKey, $foreignKey);
 
             $this->query->where($key, '=', $foreignKey);
         }

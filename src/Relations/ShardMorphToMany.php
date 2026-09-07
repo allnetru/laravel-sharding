@@ -18,7 +18,11 @@ class ShardMorphToMany extends MorphToMany
     /** @inheritDoc */
     public function addConstraints()
     {
-        $this->switchConnection($this->parent->{$this->parentKey});
+        // no column of the related table is constrained here — the pivot is
+        // what carries the parent's key — so the shard is knowable only when
+        // parent and related share a shard column
+        $this->resolveShardConnection($this->parent, null, null);
+
         parent::addConstraints();
     }
 }

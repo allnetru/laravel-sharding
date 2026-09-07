@@ -201,9 +201,38 @@ Organization::updateOrCreate(['slug' => 'acme'], ['status' => 'partner']);
 
 ### Relationships
 
-`Shardable` models support cross-shard relationships. In addition to
-`belongsTo`, the relations `hasOne`, `hasMany`, `hasOneThrough`,
-`hasManyThrough`, `belongsToMany` and all polymorphic variants
-(`morphTo`, `morphOne`, `morphMany`, `morphToMany`, `morphedByMany`)
-automatically resolve the target shard based on the local or foreign
-key.
+`Shardable` models support cross-shard relationships. `belongsTo`, `hasOne`,
+`hasMany`, `hasOneThrough`, `hasManyThrough`, `belongsToMany` and every
+polymorphic variant (`morphTo`, `morphOne`, `morphMany`, `morphToMany`,
+`morphedByMany`) all work, and each of them first tries to answer from a single
+shard.
+
+Which shard is decided by the **related table's own shard key**, never by
+whichever column joins the two rows. Those are the same thing only when a table
+is sharded by its primary key; under colocation they differ, and reading the
+joining key instead sends the query to a shard chosen by an unrelated number.
+
+A relation can name the shard exactly in two cases, and both are the shapes
+colocation takes:
+
+- **the child declares the parent's key as its shard key** — `user_profiles`
+  sharded by `user_id`. The relation constrains that very column, so the value
+  it is constrained to *is* the shard key's value;
+- **parent and child share a shard column** — both sharded by `tenant_id`. The
+  relation constrains neither, but the row in hand carries the column.
+
+Anything else cannot be known from where the relation stands. A table sharded
+by its own primary key cannot be located from a parent that only holds a
+foreign key pointing the other way, and the parent's own `id` is its identity
+rather than the child's. In that case the connection is left alone and
+`ShardBuilder` fans the query out across every shard and merges the results:
+slower, and always right.
+
+Two consequences worth knowing:
+
+- **Colocation is what buys the single-shard read.** Without it, every lazy
+  read through a relation is a fan-out. That is correct but costs one query per
+  shard, so a hot path deserves a shared shard column.
+- **Eager loading always fans out.** `with('parcels')` constrains many parents
+  at once and they may live on different shards, so there is no single
+  connection to pin. Only lazy loading of one parent can be narrowed.
