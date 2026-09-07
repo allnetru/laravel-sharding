@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.3.7 - 2026-09-07
+
+### What's Changed
+
+* fix: colocated relations pinned by column name without stating the precondition by @allnetru in https://github.com/allnetru/laravel-sharding/pull/57
+
+### Fixed
+
+* **The shared-shard-column branch pinned by column name, and the precondition was never stated.** Nothing guarantees two rows share the shard key's *value* just because they share the column's name. A foreign key from one tenant's row to another tenant's points at a different shard by construction, so v0.3.6 pinned the query to the source's shard and did not find the target — where before it, the fan-out masked the wrong guess and answered anyway. Measured on two shards: `$company->roles` returned 1 row before and 0 after.
+  
+  Nothing in the package can tell the two cases apart — both models sit in one group and both return the same name from `getShardKey()` — so the precondition stays and is stated instead, because **it is the precondition colocation already is.** A relation that has to cross shard-key values cannot be colocated and belongs on a table that is not. `ShardColocatedRelationsTest::testAForeignKeyAcrossShardKeyValuesIsNotFound` pins the behaviour so it reads as decided rather than as an accident.
+  
+* **The related column is compared on its last segment.** `belongsTo(X::class, 'x_id', 'xs.id')` is legal, and `'xs.id' !== 'id'` sent such a relation into the shared-column branch — the one with the precondition — where it could be routed by a column meaning something else. `ShardHasOne` and friends already passed an unqualified name through `getForeignKeyName()`; `ShardBelongsTo` and `ShardMorphTo` did not.
+  
+* **Four classes attempted the pin with `static::$constraints` false.** `ShardBelongsToMany`, `ShardMorphToMany`, `ShardHasOneThrough` and `ShardHasManyThrough`. Harmless in practice, because eager loading reaches them through a blank model whose shard column reads null, but it is the one place a pin could reach a query that constrains many parents. Now guarded.
+  
+* **`hasManyThrough` was fatally broken before v0.3.6 and nothing recorded it.** `ShardHasManyThrough` carried `@method mixed|null getParentKey()`; `HasManyThrough` defines no such method — only `HasOneThrough` does — so every use threw `BadMethodCallException`, and the annotation kept PHPStan quiet about it. v0.3.6 removed the call and repaired the relation without knowing it. The annotation is gone and `testHasManyThroughResolves` covers it.
+  
+
+### Changed
+
+* **`docs/en/sharding.md` no longer claims the fan-out is "always right".** It is right for reads only. `ShardBuilder` overrides `get`, `chunk`, `chunkById`, `paginate`, `firstOrCreate` and `updateOrCreate` — not `count`, `exists`, `sum`, `pluck`, `update` or `delete`. On an unpinned relation with forty children split evenly across two shards, `get()` returns 40, `count()` returns 20, and `delete()` removes 20 and leaves 20 orphans. That is defect 2 in the list and it is not fixed.
+  
+* **A through relation cannot be sharded at all,** and the docs now say so. `hasOneThrough` and `hasManyThrough` join the intermediate table to the related one, and a join cannot cross connections: across two shards such a relation answers only from the shard where both rows happen to land. Colocate all three tables on one shard key, or keep them on one connection.
+  
+
+**Full Changelog**: https://github.com/allnetru/laravel-sharding/compare/v0.3.6...v0.3.7
+
 ## v0.3.6 - 2026-09-07
 
 ### What's Changed
