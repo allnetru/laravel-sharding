@@ -45,8 +45,35 @@ class ShardBuilder extends EloquentBuilder
         $builder->singleConnection = true;
         $builder->withoutReplicas();
         $builder->setEagerLoads($this->getEagerLoads());
+        $this->copyScopesTo($builder);
 
         return $builder;
+    }
+
+    /**
+     * Carry the builder's global scopes over to a per-shard copy.
+     *
+     * Global scopes live on the builder and are applied lazily, so cloning the
+     * query alone produced a copy with none of them: every fanned-out read
+     * returned the rows its scopes existed to hide, soft-deleted ones first.
+     *
+     * The scope objects are passed rather than their constraints, because
+     * withGlobalScope() re-runs extend() — which is what puts SoftDeletes'
+     * delete callback and its macros back on the copy. Removals are carried
+     * too, so withTrashed() on the original still means withTrashed() here.
+     *
+     * @param self $builder
+     * @return void
+     */
+    protected function copyScopesTo(self $builder): void
+    {
+        foreach ($this->scopes as $identifier => $scope) {
+            $builder->withGlobalScope($identifier, $scope);
+        }
+
+        foreach ($this->removedScopes as $identifier) {
+            $builder->withoutGlobalScope($identifier);
+        }
     }
 
     /**
