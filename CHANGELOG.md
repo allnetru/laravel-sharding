@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.3.9 - 2026-09-08
+
+### What's Changed
+
+* fix: aggregates answered from one randomly chosen shard by @allnetru in https://github.com/allnetru/laravel-sharding/pull/61
+* fix: the fan-out dropped every global scope by @allnetru in https://github.com/allnetru/laravel-sharding/pull/62
+
+Both halves of this release are the same defect seen from two sides: `ShardBuilder` was transparent only for the methods it overrode and only for state that lived on the query. Anything on the builder, and anything building its own SQL, quietly addressed a single shard.
+
+### Fixed
+
+* **Aggregates answered from one randomly chosen shard.** `count`, `sum`, `min`, `max`, `avg` and `exists` are not among the overridden methods, so they fell through to Eloquent's passthru and ran against a single connection. Which one was not even stable: `Shardable::getConnectionName()` on a model with no shard key **generates** a snowflake and routes to whatever it hashes to, so two identical calls could pick different shards.
+  
+  Measured on two shards holding six rows, ids 1..6, values equal to the ids: `count()` returned 3, `sum()` returned 9 of 21, `avg()` returned one shard's average, and `where('value', 4)->count()` returned 0 over an existing row — the case already reported in the v0.3.6 notes.
+  
+  They now fan out through `runOnConnections()`, so the shards are queried concurrently under Swoole, and the parts are combined: counts and sums add up, the extreme of the extremes wins, one shard saying yes is enough for `exists` and every shard is asked before saying no. Replicas are excluded, so a row copied onto a second shard is not counted twice.
+  
+* **`avg()` is deliberately not the average of the shard averages,** which is the average only when every shard holds the same number of rows. Sums and counts are collected and divided once, and the divisor counts the column rather than the rows, because SQL `AVG` ignores nulls. `ShardAggregateTest::testAverageIsNotTheAverageOfTheShardAverages` pins it on a topology where one shard averages 2, the other averages 10, and the answer is 4.
+  
+* **Grouped, distinct and having-filtered aggregates now throw** `Allnetru\Sharding\Exceptions\UnsupportedCrossShardQuery` instead of returning a plausible wrong number. A group may have rows on several shards, and a distinct value would be counted once for every shard that holds it — neither is a part of the whole answer, it is an answer to a different question. Pin the query with `onShardConnection()`, or give it its shard key, and all three work as ordinary Eloquent on the one shard that owns the answer.
+  
+* **The fan-out dropped every global scope, so soft-deleted rows came back.** Global scopes live on the builder and are applied lazily; `replicateForConnection()` cloned the query, which carries wheres but not scopes, and built the copy with `new self($query)` rather than through `newQuery()`. Nothing ever registered them. On two shards holding two live and two soft-deleted rows, `Model::get()` returned all four and `count()` returned 4.
+  
+  `onlyTrashed()` looked correct throughout, and that is the tell: it removes the scope and adds an ordinary `whereNotNull`, which the clone did carry. Anything expressed as a scope was lost; anything expressed as a where survived. This had been true of `get()`, `paginate()` and `chunk()` for as long as the fan-out has existed.
+  
+  The copy now receives the scope **objects** rather than their constraints, because `withGlobalScope()` re-runs `extend()` — which is what puts `SoftDeletes`' delete callback and its macros back. Removals are carried as removals, so `withTrashed()` on the original still means `withTrashed()` on every shard.
+  
+
+### Changed
+
+* `docs/en/sharding.md` gains **Aggregates** and **Global scopes** sections, and the caveat list is corrected: it claimed `count()` and `exists()` were uncovered, which is no longer true.
+
+### Still not fixed
+
+The write half of defect 2 stands, and it is now the dangerous one:
+
+* `update()`, `delete()`, `increment()`, `decrement()` and `upsert()` still run against one randomly chosen shard. `delete()` removes the rows on that shard, leaves the rest, and **reports the count it did remove** — so it reads as success.
+* `pluck()` and `cursor()` are likewise single-shard on the read side.
+
+**Full Changelog**: https://github.com/allnetru/laravel-sharding/compare/v0.3.8...v0.3.9
+
 ## v0.3.8 - 2026-09-08
 
 ### What's Changed
