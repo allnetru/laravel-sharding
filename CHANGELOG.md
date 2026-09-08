@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.3.14 - 2026-09-08
+
+### What's Changed
+
+* fix: a morphTo on a sharded model was fatal before its type was set by @allnetru in https://github.com/allnetru/laravel-sharding/pull/73
+
+### Fixed
+
+* **A `morphTo` on a sharded model threw before its type was assigned.** `ShardMorphTo::addConstraints()` resolves the related model straight away so it can pick the shard — earlier than stock Eloquent resolves anything, since `MorphTo` does not override `addConstraints` at all and waits until the results are fetched. Resolving early is what lets a colocated morph read one shard instead of every one, and it means the method has to survive states stock code never resolves a model in.
+  
+  One of those is an unsaved row whose morph is about to be assigned. `spatie/laravel-activitylog` builds an entry and reads `$activity->subject` before setting `subject_type`, so `createModelByType(null)` ran on every logged save: `Class name must be a valid object or a string`, thrown from inside a model event on an ordinary `Model::create()`.
+  
+  With no type there is no related table, no key to constrain on and no shard to choose, so the relation now falls through to `BelongsTo` — exactly what stock `MorphTo` does, and its `getResults()` answers null while the type is missing.
+  
+
+### Added
+
+* `tests/Unit/ShardMorphToTest.php`. Two of its three cases fail without the fix; the third pins that a morph **with** a type still resolves, so the guard cannot buy safety by breaking the reason the class exists.
+
+**Full Changelog**: https://github.com/allnetru/laravel-sharding/compare/v0.3.13...v0.3.14
+
 ## v0.3.13 - 2026-09-08
 
 ### What's Changed
