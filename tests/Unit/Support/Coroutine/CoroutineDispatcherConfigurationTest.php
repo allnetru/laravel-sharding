@@ -41,6 +41,10 @@ class CoroutineDispatcherConfigurationTest extends TestCase
     public function testConfiguredDriverResolvedFromContainer(): void
     {
         $fake = new FakeCoroutineDriver();
+        // inside a coroutine, because that is where tasks are dispatched
+        // concurrently since v0.3.13 — outside one the dispatcher stays
+        // sequential and would touch the driver only to ask
+        $fake->inCoroutine = true;
         $this->app->instance(FakeCoroutineDriver::class, $fake);
 
         config()->set('sharding.coroutines', [
@@ -56,13 +60,17 @@ class CoroutineDispatcherConfigurationTest extends TestCase
         ]);
 
         $this->assertSame(['first' => 1, 'second' => 2], $results);
-        $this->assertSame(1, $fake->runCalls);
+        $this->assertSame(0, $fake->runCalls);
         $this->assertSame(2, $fake->createCalls);
     }
 
     public function testConfiguredDriverResolvedFromClosure(): void
     {
         $fake = new FakeCoroutineDriver();
+        // inside a coroutine, because that is where tasks are dispatched
+        // concurrently since v0.3.13 — outside one the dispatcher stays
+        // sequential and would touch the driver only to ask
+        $fake->inCoroutine = true;
 
         config()->set('sharding.coroutines', [
             'default' => 'closure',
@@ -77,7 +85,7 @@ class CoroutineDispatcherConfigurationTest extends TestCase
         ]);
 
         $this->assertSame(['alpha' => 10, 'beta' => 20], $results);
-        $this->assertSame(1, $fake->runCalls);
+        $this->assertSame(0, $fake->runCalls);
         $this->assertSame(2, $fake->createCalls);
     }
 }

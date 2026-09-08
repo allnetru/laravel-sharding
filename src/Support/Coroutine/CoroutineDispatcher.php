@@ -49,28 +49,26 @@ final class CoroutineDispatcher
             return self::dispatchInCoroutine($tasks, $driver);
         }
 
-        $hasResult = false;
-        $result = null;
-        $error = null;
-
-        if ($driver->run(function () use ($tasks, $driver, &$result, &$hasResult, &$error): void {
-            try {
-                $result = self::dispatchInCoroutine($tasks, $driver);
-                $hasResult = true;
-            } catch (Throwable $throwable) {
-                $error = $throwable;
-            }
-        })) {
-            if ($error instanceof Throwable) {
-                throw $error;
-            }
-
-            if ($hasResult) {
-                /** @var array<TKey, TValue> $result */
-                return $result;
-            }
-        }
-
+        /*
+        | Outside a coroutine the tasks are run one after another, and this
+        | used to boot a scheduler instead so they would still go in parallel.
+        | That is the wrong trade: a console process that starts a Swoole event
+        | loop is not guaranteed to leave it, and one that does not never
+        | exits.
+        |
+        | Measured on two shards: `php artisan tinker` doing a single
+        | `User::count()` returned the right number and then hung until it was
+        | killed; with the sequential path it exits. The extension being
+        | loaded is not the same thing as being inside a server that is driving
+        | the loop, and `isSupported()` cannot tell the two apart — being in a
+        | coroutine already can.
+        |
+        | Nothing is lost where it matters. Octane's Swoole handler runs a
+        | request inside a coroutine, so the branch above takes it and the
+        | fan-out is still concurrent on the path that serves people. A
+        | migration, a seeder or a scheduled command pays two round trips
+        | instead of one and, in exchange, finishes.
+        */
         return self::runSequentially($tasks);
     }
 

@@ -329,11 +329,17 @@ is one connection and nothing is being assembled from parts.
 
 When the application runs within a Swoole coroutine runtime, read queries that
 fan out across multiple shards are executed concurrently. Laravel Octane with
-the Swoole engine automatically enables this behaviour. The package aggregates
-the results through coroutine channels so the request waits only for the
-slowest shard. When code executes outside an existing coroutine, the dispatcher
-boots a lightweight coroutine scheduler so queries still complete in
-parallel.
+the Swoole engine automatically enables this behaviour — its request handler
+runs inside a coroutine — and the package aggregates the results through
+coroutine channels, so the request waits only for the slowest shard.
+
+**Outside an existing coroutine the shards are read one after another.** A
+console process is the case that matters: before v0.3.13 the dispatcher started
+a scheduler of its own so the reads would still be concurrent, and a process
+that starts a Swoole event loop does not reliably leave it. Measured on two
+shards, `php artisan tinker` doing a single `User::count()` returned the right
+number and then hung until it was killed. A migration, a seeder or a scheduled
+command now pays one round trip per shard and, in exchange, exits.
 
 #### Custom coroutine drivers
 
