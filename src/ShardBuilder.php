@@ -158,6 +158,59 @@ class ShardBuilder extends EloquentBuilder
     }
 
     /**
+     * The most rows a single shard can contribute to a bounded read.
+     *
+     * To produce the global rows [offset, offset + limit) the merge below
+     * never needs more than that many rows from any one shard: a row that
+     * lands in the global window is preceded there by every row that precedes
+     * it on its own shard. So the database can stop counting at the bound
+     * instead of returning the table.
+     *
+     * Null means there is no bound. Without a limit every row after the
+     * offset may still be needed, and pdo_pgsql buffers whatever comes back,
+     * so an unbounded read of a large shard is exactly as expensive as it
+     * looks.
+     *
+     * @param int|null $limit
+     * @param int|null $offset
+     * @return int|null
+     */
+    protected function shardBound(?int $limit, ?int $offset): ?int
+    {
+        if ($limit === null) {
+            return null;
+        }
+
+        return max(0, $offset ?? 0) + $limit;
+    }
+
+    /**
+     * Constrain one shard's query to the rows the merge can still use.
+     *
+     * The ordering is applied here and not only in compareModels(), because
+     * the two have to agree: a limit over an unordered query returns an
+     * arbitrary subset, and merging arbitrary subsets gives an arbitrary
+     * answer. compareModels() falls back to the primary key when nothing was
+     * ordered, so the query does the same.
+     *
+     * @param self $builder
+     * @param int|null $bound
+     * @return void
+     */
+    protected function applyShardBound(self $builder, ?int $bound): void
+    {
+        if ($bound === null) {
+            return;
+        }
+
+        if (empty($this->getQuery()->orders)) {
+            $builder->orderBy($this->getModel()->getKeyName());
+        }
+
+        $builder->limit($bound);
+    }
+
+    /**
      * Retrieve models with a global limit and offset across shards.
      *
      * @param int|null $limit
@@ -169,9 +222,11 @@ class ShardBuilder extends EloquentBuilder
     {
         $iterators = [];
         $current = [];
+        $bound = $this->shardBound($limit, $offset);
 
         foreach ($this->connections() as $name => $config) {
             $builder = $this->replicateForConnection($name)->select($columns);
+            $this->applyShardBound($builder, $bound);
             /** @var \Generator<int, \Illuminate\Database\Eloquent\Model> $iterator */
             $iterator = $builder->cursor()->getIterator();
             $iterator->rewind();
@@ -267,10 +322,16 @@ class ShardBuilder extends EloquentBuilder
         $total = $total ?: 0;
         $iterators = [];
         $current = [];
+        $skip = max(0, ($page - 1) * $perPage);
+        $bound = $this->shardBound($perPage, $skip);
 
         foreach ($this->connections() as $name => $config) {
+            // the count has to see the whole shard, the cursor only the rows
+            // this page can reach, so they cannot share a builder
+            $total += $this->replicateForConnection($name)->count();
+
             $builder = $this->replicateForConnection($name);
-            $total += $builder->count();
+            $this->applyShardBound($builder, $bound);
             /** @var \Generator<int, \Illuminate\Database\Eloquent\Model> $iterator */
             $iterator = $builder->cursor()->getIterator();
             $iterator->rewind();
@@ -281,7 +342,6 @@ class ShardBuilder extends EloquentBuilder
             }
         }
 
-        $skip = max(0, ($page - 1) * $perPage);
         $items = [];
 
         while (!empty($current)) {

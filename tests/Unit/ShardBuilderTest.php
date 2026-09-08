@@ -127,6 +127,88 @@ class ShardBuilderTest extends TestCase
         $this->assertLessThan(8 * 1024 * 1024, memory_get_peak_usage(true) - $baseline);
     }
 
+    public function testLimitIsPushedDownToEveryShard(): void
+    {
+        $this->seedInterleaved();
+        $this->startLoggingShardQueries();
+
+        $values = Item::orderBy('id')->limit(3)->get()->pluck('id')->all();
+
+        $this->assertSame([1, 2, 3], $values);
+
+        foreach (['shard_1', 'shard_2'] as $connection) {
+            $this->assertMatchesRegularExpression(
+                '/limit 3$/',
+                $this->lastSelectOn($connection),
+                "the query sent to {$connection} carried no bound",
+            );
+        }
+    }
+
+    public function testOffsetAndLimitPushDownTheirSumToEveryShard(): void
+    {
+        $this->seedInterleaved();
+        $this->startLoggingShardQueries();
+
+        $values = Item::orderBy('id')->offset(2)->limit(3)->get()->pluck('id')->all();
+
+        $this->assertSame([3, 4, 5], $values);
+
+        // five rather than three: the merge discards the first two globally,
+        // and either shard may be the one that supplied them
+        foreach (['shard_1', 'shard_2'] as $connection) {
+            $this->assertMatchesRegularExpression('/limit 5$/', $this->lastSelectOn($connection));
+        }
+    }
+
+    public function testAnUnorderedLimitOrdersEachShardBeforeBoundingIt(): void
+    {
+        $this->seedInterleaved();
+        $this->startLoggingShardQueries();
+
+        $values = Item::limit(3)->get()->pluck('id')->all();
+
+        // without the order the bound would cut an arbitrary three rows from
+        // each shard, and merging arbitrary subsets answers arbitrarily
+        $this->assertSame([1, 2, 3], $values);
+
+        foreach (['shard_1', 'shard_2'] as $connection) {
+            $this->assertStringContainsString('order by "id" asc', $this->lastSelectOn($connection));
+        }
+    }
+
+    public function testAnUnboundedGetStaysUnbounded(): void
+    {
+        $this->seedInterleaved();
+        $this->startLoggingShardQueries();
+
+        $values = Item::orderBy('id')->get()->pluck('id')->all();
+
+        $this->assertSame([1, 2, 3, 4, 5, 6], $values);
+
+        // no limit was asked for, so none can be derived: every row may be
+        // part of the answer
+        foreach (['shard_1', 'shard_2'] as $connection) {
+            $this->assertStringNotContainsString('limit', $this->lastSelectOn($connection));
+        }
+    }
+
+    public function testPaginateBoundsTheCursorAndLeavesTheCountAlone(): void
+    {
+        $this->seedInterleaved();
+        $this->startLoggingShardQueries();
+
+        $page = Item::orderBy('id')->paginate(2, ['*'], 'page', 2);
+
+        $this->assertSame([3, 4], $page->pluck('id')->all());
+        $this->assertSame(6, $page->total());
+
+        foreach (['shard_1', 'shard_2'] as $connection) {
+            $this->assertMatchesRegularExpression('/limit 4$/', $this->lastSelectOn($connection));
+            $this->assertStringNotContainsString('limit', $this->lastCountOn($connection));
+        }
+    }
+
     public function testEagerLoadsRelationsAcrossShards(): void
     {
         DB::connection('shard_1')->table('parents')->insert(['id' => 1, 'is_replica' => false]);
@@ -216,6 +298,61 @@ class ShardBuilderTest extends TestCase
         $this->assertSame(20, $item->value);
         $this->assertSame('shard_1', $item->getConnectionName());
         $this->assertDatabaseHas('items', ['id' => 75, 'value' => 20], 'shard_1');
+    }
+
+    /**
+     * Put the odd identifiers on one shard and the even ones on the other, so
+     * neither shard alone can answer an ordered page.
+     */
+    protected function seedInterleaved(): void
+    {
+        foreach ([1, 3, 5] as $id) {
+            DB::connection('shard_1')->table('items')->insert(['id' => $id, 'value' => $id, 'is_replica' => false]);
+        }
+
+        foreach ([2, 4, 6] as $id) {
+            DB::connection('shard_2')->table('items')->insert(['id' => $id, 'value' => $id, 'is_replica' => false]);
+        }
+    }
+
+    protected function startLoggingShardQueries(): void
+    {
+        foreach (['shard_1', 'shard_2'] as $connection) {
+            DB::connection($connection)->flushQueryLog();
+            DB::connection($connection)->enableQueryLog();
+        }
+    }
+
+    /**
+     * The last row-returning statement the shard was asked to run.
+     */
+    protected function lastSelectOn(string $connection): string
+    {
+        return $this->lastQueryOn($connection, static fn (string $sql): bool => str_starts_with($sql, 'select ')
+            && !str_contains($sql, 'count(*)'));
+    }
+
+    protected function lastCountOn(string $connection): string
+    {
+        return $this->lastQueryOn($connection, static fn (string $sql): bool => str_contains($sql, 'count(*)'));
+    }
+
+    /**
+     * @param callable(string): bool $matches
+     */
+    protected function lastQueryOn(string $connection, callable $matches): string
+    {
+        $found = null;
+
+        foreach (DB::connection($connection)->getQueryLog() as $entry) {
+            if ($matches($entry['query'])) {
+                $found = $entry['query'];
+            }
+        }
+
+        $this->assertNotNull($found, "no matching statement reached {$connection}");
+
+        return $found;
     }
 }
 

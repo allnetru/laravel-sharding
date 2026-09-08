@@ -152,6 +152,43 @@ $partners = Organization::where('status', OrganizationStatus::partner)
 
 These calls transparently span all shards defined for the target table.
 
+### What a bounded read costs
+
+A query that names its shard key reads one shard. Anything else fans out, and
+the results are merged in the process by the same ordering the query asked for.
+
+When such a query carries a limit, the bound travels to the shards: to produce
+the global rows `[offset, offset + limit)` the merge never needs more than
+`offset + limit` rows from any single shard, so that is what each of them is
+asked for. A `limit(50)` over eight shards therefore reads 400 rows, not eight
+tables.
+
+```php
+// 50 rows from each shard, merged down to 50
+Organization::orderBy('id')->limit(50)->get();
+
+// page 3 of 50: each shard is asked for 150 rows
+Organization::orderBy('id')->paginate(50, page: 3);
+```
+
+Two consequences worth knowing:
+
+- **A limit without an order is still ordered.** Cutting an arbitrary 50 rows
+  from each shard and merging the pieces would answer arbitrarily, so a bounded
+  query with no `orderBy` is ordered by the primary key before the bound is
+  applied — the same fallback the merge itself uses.
+- **An offset is not free, and a deep one is expensive.** The bound grows with
+  the page number, and the rows before the window are discarded in the process.
+  Prefer a keyset cursor (`where('id', '<', $last)->orderBy('id', 'desc')`),
+  which keeps every shard reading exactly one page regardless of how far in
+  the reader has gone.
+
+A query with an offset but **no** limit has no derivable bound — every row
+after the offset may belong to the answer — so it reads the shards in full.
+The same is true of an unbounded `get()`. Note that `pdo_pgsql` buffers a
+result set on the client, so `cursor()` does not make an unbounded read of a
+large table cheap.
+
 ### Coroutine execution with Swoole
 
 When the application runs within a Swoole coroutine runtime, read queries that
