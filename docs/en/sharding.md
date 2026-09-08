@@ -189,6 +189,30 @@ The same is true of an unbounded `get()`. Note that `pdo_pgsql` buffers a
 result set on the client, so `cursor()` does not make an unbounded read of a
 large table cheap.
 
+### Aggregates
+
+`count`, `sum`, `min`, `max`, `avg` and `exists` are answered from every shard
+and combined: counts and sums add up, the smallest of the smallest is the
+smallest, and one shard saying yes is enough for `exists`. Replica rows are
+excluded, so a row copied onto a second shard is not counted twice.
+
+`avg` is deliberately not the average of the shard averages — that is only the
+average when every shard holds the same number of rows. The sums and the counts
+are collected and divided once, and the divisor counts the column rather than
+the rows, because SQL `AVG` ignores nulls.
+
+Three shapes cannot be combined and throw `UnsupportedCrossShardQuery` instead
+of returning a plausible wrong number:
+
+```php
+Organization::groupBy('status')->count();      // a group may span shards
+Organization::distinct()->count('country');    // counted once per shard holding it
+Organization::groupBy('x')->having(...)->sum('y');
+```
+
+Pin such a query with `onShardConnection()`, or give it its shard key, and it
+runs as ordinary Eloquent on the one shard that owns the answer.
+
 ### Coroutine execution with Swoole
 
 When the application runs within a Swoole coroutine runtime, read queries that
@@ -288,13 +312,16 @@ Three more consequences worth knowing:
   cannot cross connections. Across two shards such a relation answers only from
   the shard where both rows happen to land — which is to say, by luck. Colocate
   all three tables on the same shard key, or keep them on one connection.
-- **The fan-out is not a guarantee of correctness — only of reads.**
+- **The fan-out covers the methods it overrides, and no others.**
   `ShardBuilder` overrides `get`, `chunk`, `chunkById`, `paginate`,
-  `firstOrCreate` and `updateOrCreate`, and nothing else. On a relation that
-  could not be pinned, `count()`, `exists()`, `sum()`, `pluck()`, `update()`
-  and `delete()` still run on one connection — the parent's — and answer for a
-  fraction of the rows. With forty children split evenly across two shards,
-  `get()` returns forty while `count()` returns twenty and `delete()` removes
-  twenty and leaves twenty orphans. That is the second defect in this list and
-  it is not fixed; on a colocated relation, which is pinned, the same calls are
-  correct because the one shard is the right one.
+  `firstOrCreate`, `updateOrCreate`, and — since v0.3.9 — `count`, `sum`,
+  `min`, `max`, `avg`, `average`, `exists` and `doesntExist`. Anything that
+  builds its own SQL and is not on that list still runs on one connection and
+  answers for a fraction of the rows.
+
+  What is still uncovered: **`pluck()`, `cursor()`, `update()`, `delete()`,
+  `increment()`, `decrement()` and `upsert()`.** With forty children split
+  evenly across two shards, `get()` returns forty while `delete()` removes
+  twenty and leaves twenty orphans — and reports twenty, which is the
+  dangerous part. On a colocated relation, which is pinned, all of them are
+  correct, because the one shard is the right one.
