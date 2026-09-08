@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.3.8 - 2026-09-08
+
+### What's Changed
+
+* fix: cross-shard reads sent no limit to the shards by @allnetru in https://github.com/allnetru/laravel-sharding/pull/59
+
+### Fixed
+
+* **A fanned-out read asked every shard for its whole ordered table.** `ShardBuilder::get()` took `limit` and `offset` off the query *before* replicating it per connection, and `replicateForConnection()` then cloned the already-stripped query. What reached each shard was `SELECT … ORDER BY …` with no bound at all; the limit was honoured only while merging, in the process. `paginate()` had the same shape.
+  
+  The comment on `getWithLimitAndOffset()` implied the per-shard `cursor()` kept memory flat. It does not on PostgreSQL: `Illuminate\Database\Connection::cursor()` is `prepare`, `execute` and a `fetch()` loop with nothing driver-specific in it, and `pdo_pgsql` buffers the result set on the client. The generator yields its first row only once the shard's whole table is in PHP memory.
+  
+  Each shard is now asked for `offset + limit` rows — the most a single shard can contribute to the global window, since a row inside that window is preceded there by every row that precedes it on its own shard. `limit(50)` over eight shards reads 400 rows instead of eight tables. It is invisible on a single shard, which is why it went unnoticed.
+  
+* **A bound needs an order, so an unordered limit now orders each shard by its primary key.** Cutting an arbitrary 50 rows from each shard and merging the pieces answers arbitrarily. `compareModels()` already fell back to the primary key when nothing was ordered; the per-shard query now uses the same fallback, so the shard and the merge agree. Observable results are unchanged — before the fix the merge sorted every row by the same key.
+  
+* **`paginate()` no longer bounds its own count.** The count and the cursor shared a builder, so the page bound would have truncated the total. They are separate builders now: the count sees the whole shard, the cursor only the rows the page can reach.
+  
+* An offset with **no** limit yields no derivable bound — every row after it may belong to the answer — so those reads are deliberately left unbounded, as is an unbounded `get()`. `testAnUnboundedGetStaysUnbounded` pins that, and it is the one new case that passes with and without the fix.
+  
+
+### Changed
+
+* `docs/en/sharding.md` gains **"What a bounded read costs"**: what the fan-out actually reads, why a limit without an order is still ordered, why a deep offset grows the bound while a keyset cursor does not, and the `pdo_pgsql` buffering caveat.
+
+### Still not fixed
+
+Defect 2 from the v0.3.7 notes stands, and it is the larger one. `ShardBuilder` overrides `get`, `chunk`, `chunkById`, `paginate`, `firstOrCreate` and `updateOrCreate`. Everything that builds its own SQL still runs against a single shard chosen at random — `getConnectionName()` on a model with no shard key **generates one** and routes to it. Measured on two shards holding six rows:
+
+| call | returned | truth |
+|---|---|---|
+| `get()->count()` | 6 | 6 |
+| `count()` | 3 | 6 |
+| `sum('value')` | 9 | 21 |
+| `pluck('id')` | `[2,4,6]` | `[1..6]` |
+| `where('value', 4)->count()` | 0 | 1 |
+| `cursor()->count()` | 3 | 6 |
+| `update([...])` | 3 rows | 6 |
+| `delete()` | 3 rows, 3 survive | 6 |
+
+Anything that funnels through `get()` — `first`, `find`, `value`, `whereIn`, `simplePaginate`, `cursorPaginate`, `lazy` — is correct. Aggregates, `pluck`, `cursor`, `update` and `delete` are not, and `delete()` reporting success over half the rows is the dangerous one.
+
+**Full Changelog**: https://github.com/allnetru/laravel-sharding/compare/v0.3.7...v0.3.8
+
 ## v0.3.7 - 2026-09-07
 
 ### What's Changed
