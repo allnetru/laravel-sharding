@@ -4,10 +4,16 @@ namespace Allnetru\Sharding;
 
 use Allnetru\Sharding\Exceptions\UnsupportedCrossShardQuery;
 use Allnetru\Sharding\Support\Coroutine\CoroutineDispatcher;
+use ArrayIterator;
 use Closure;
+use Generator;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
+use Illuminate\Database\Query\Expression;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Pagination\Paginator;
+use Illuminate\Support\LazyCollection;
+use Illuminate\Support\Str;
+use Iterator;
 
 /**
  * Eloquent builder that queries across multiple shard connections.
@@ -118,46 +124,19 @@ class ShardBuilder extends EloquentBuilder
             return $this->getWithLimitAndOffset($limit, $offset, $columns);
         }
 
-        $results = [];
-        $batches = [];
-        $indexes = [];
-
         $batches = $this->runOnConnections(function (string $name, array $config) use ($columns) {
             $builder = $this->replicateForConnection($name);
 
             return $builder->get($columns)->all();
         });
 
-        foreach ($batches as $name => $items) {
-            $indexes[$name] = 0;
-        }
+        // the shards were read in parallel, so the merge runs over what is
+        // already in memory rather than over open cursors
+        $iterators = array_map(static fn (array $items): ArrayIterator => new ArrayIterator($items), $batches);
 
-        while (true) {
-            $candidate = null;
-            $candidateKey = null;
-
-            foreach ($batches as $name => $items) {
-                $index = $indexes[$name];
-
-                if (!isset($items[$index])) {
-                    continue;
-                }
-
-                if (!$candidate || $this->compareModels($items[$index], $candidate) < 0) {
-                    $candidate = $items[$index];
-                    $candidateKey = $name;
-                }
-            }
-
-            if (!$candidate) {
-                break;
-            }
-
-            $results[] = $candidate;
-            $indexes[$candidateKey]++;
-        }
-
-        return $this->getModel()->newCollection($results);
+        return $this->getModel()->newCollection(
+            iterator_to_array($this->mergeShardResults($iterators), false),
+        );
     }
 
     /**
@@ -249,56 +228,147 @@ class ShardBuilder extends EloquentBuilder
     protected function getWithLimitAndOffset(?int $limit, ?int $offset, array $columns)
     {
         $iterators = [];
-        $current = [];
         $bound = $this->shardBound($limit, $offset);
 
         foreach ($this->connections() as $name => $config) {
             $builder = $this->replicateForConnection($name)->select($columns);
             $this->applyShardBound($builder, $bound);
-            /** @var \Generator<int, \Illuminate\Database\Eloquent\Model> $iterator */
-            $iterator = $builder->cursor()->getIterator();
+            $iterators[$name] = $builder->cursor()->getIterator();
+        }
+
+        return $this->getModel()->newCollection(
+            $this->takeFromMerge($this->mergeShardResults($iterators), $limit, $offset),
+        );
+    }
+
+    /**
+     * @inheritdoc
+     *
+     * The shards are read one row at a time and merged as they come, so the
+     * ordering is the query's own rather than shard after shard.
+     *
+     * It is lazy in the sense the caller cares about — models are hydrated as
+     * they are pulled — but note that pdo_pgsql buffers a result set on the
+     * client, so this does not make an unbounded read of a large shard cheap.
+     * Give the query a limit, or use chunkById() and pay one round trip per
+     * chunk.
+     */
+    public function cursor()
+    {
+        if ($this->singleConnection) {
+            return parent::cursor();
+        }
+
+        return new LazyCollection(function (): Generator {
+            $iterators = [];
+
+            foreach ($this->connections() as $name => $config) {
+                $iterators[$name] = $this->replicateForConnection($name)->cursor()->getIterator();
+            }
+
+            yield from $this->mergeShardResults($iterators);
+        });
+    }
+
+    /**
+     * @inheritdoc
+     *
+     * Every column is read rather than just the two being plucked: the merge
+     * orders by comparing the models, so a query ordered by a column that was
+     * not selected would be merged by a property that is null everywhere.
+     */
+    public function pluck($column, $key = null)
+    {
+        if ($this->singleConnection) {
+            return parent::pluck($column, $key);
+        }
+
+        $table = $this->getModel()->getTable();
+
+        // not a static closure: the Expression branch needs the grammar, and
+        // reaching for $this in a static one is a fatal the tests would only
+        // hit on a raw column
+        $name = fn ($value): string => Str::after(
+            $value instanceof Expression ? (string) $value->getValue($this->getGrammar()) : (string) $value,
+            "{$table}.",
+        );
+
+        return $this->get()->pluck($name($column), $key === null ? null : $name($key));
+    }
+
+    /**
+     * Merge per-shard results into one stream ordered by the query's own order.
+     *
+     * The shards each answer in order, so the smallest unconsumed row across
+     * them is the next row overall — the ordinary merge step, and the reason
+     * a fanned-out read costs the page rather than the table.
+     *
+     * @param array<string, Iterator<int, \Illuminate\Database\Eloquent\Model>> $iterators
+     * @return Generator<int, \Illuminate\Database\Eloquent\Model>
+     */
+    protected function mergeShardResults(array $iterators): Generator
+    {
+        $current = [];
+
+        foreach ($iterators as $name => $iterator) {
             $iterator->rewind();
 
             if ($iterator->valid()) {
                 $current[$name] = $iterator->current();
-                $iterators[$name] = $iterator;
             }
         }
 
-        $skip = max(0, $offset ?? 0);
-        $items = [];
-
-        while (!empty($current)) {
+        while ($current !== []) {
             $candidate = null;
             $candidateKey = null;
 
             foreach ($current as $name => $model) {
-                if (!$candidate || $this->compareModels($model, $candidate) < 0) {
+                if ($candidate === null || $this->compareModels($model, $candidate) < 0) {
                     $candidate = $model;
                     $candidateKey = $name;
                 }
             }
 
-            if ($skip > 0) {
-                $skip--;
-            } else {
-                $items[] = $candidate;
-
-                if ($limit !== null && count($items) >= $limit) {
-                    break;
-                }
-            }
+            yield $candidate;
 
             $iterators[$candidateKey]->next();
 
             if ($iterators[$candidateKey]->valid()) {
                 $current[$candidateKey] = $iterators[$candidateKey]->current();
             } else {
-                unset($current[$candidateKey], $iterators[$candidateKey]);
+                unset($current[$candidateKey]);
+            }
+        }
+    }
+
+    /**
+     * Skip the offset and take the limit out of a merged stream.
+     *
+     * @param Generator<int, \Illuminate\Database\Eloquent\Model> $merged
+     * @param int|null $limit
+     * @param int|null $offset
+     * @return list<\Illuminate\Database\Eloquent\Model>
+     */
+    protected function takeFromMerge(Generator $merged, ?int $limit, ?int $offset): array
+    {
+        $skip = max(0, $offset ?? 0);
+        $items = [];
+
+        foreach ($merged as $model) {
+            if ($skip > 0) {
+                $skip--;
+
+                continue;
+            }
+
+            $items[] = $model;
+
+            if ($limit !== null && count($items) >= $limit) {
+                break;
             }
         }
 
-        return $this->getModel()->newCollection($items);
+        return $items;
     }
 
     /**
@@ -349,7 +419,6 @@ class ShardBuilder extends EloquentBuilder
 
         $total = $total ?: 0;
         $iterators = [];
-        $current = [];
         $skip = max(0, ($page - 1) * $perPage);
         $bound = $this->shardBound($perPage, $skip);
 
@@ -360,47 +429,12 @@ class ShardBuilder extends EloquentBuilder
 
             $builder = $this->replicateForConnection($name);
             $this->applyShardBound($builder, $bound);
-            /** @var \Generator<int, \Illuminate\Database\Eloquent\Model> $iterator */
-            $iterator = $builder->cursor()->getIterator();
-            $iterator->rewind();
-
-            if ($iterator->valid()) {
-                $current[$name] = $iterator->current();
-                $iterators[$name] = $iterator;
-            }
+            $iterators[$name] = $builder->cursor()->getIterator();
         }
 
-        $items = [];
-
-        while (!empty($current)) {
-            $candidate = null;
-            $candidateKey = null;
-
-            foreach ($current as $name => $model) {
-                if (!$candidate || $this->compareModels($model, $candidate) < 0) {
-                    $candidate = $model;
-                    $candidateKey = $name;
-                }
-            }
-
-            if ($skip > 0) {
-                $skip--;
-            } else {
-                $items[] = $candidate;
-                if (count($items) >= $perPage) {
-                    break;
-                }
-            }
-
-            $iterators[$candidateKey]->next();
-            if ($iterators[$candidateKey]->valid()) {
-                $current[$candidateKey] = $iterators[$candidateKey]->current();
-            } else {
-                unset($current[$candidateKey], $iterators[$candidateKey]);
-            }
-        }
-
-        $collection = $this->getModel()->newCollection($items);
+        $collection = $this->getModel()->newCollection(
+            $this->takeFromMerge($this->mergeShardResults($iterators), $perPage, $skip),
+        );
 
         return new LengthAwarePaginator($collection, $total, $perPage, $page, [
             'path' => Paginator::resolveCurrentPath(),

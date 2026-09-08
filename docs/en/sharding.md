@@ -255,6 +255,23 @@ to, so the statement would have to be split per row, and the conflicting row it
 turns on may live on a shard the statement never reaches. Save the models one
 by one, which routes each of them.
 
+### Streaming and plucking
+
+`cursor()` opens one cursor per shard and merges them as they are consumed, so
+the order is the query's own rather than shard after shard, and breaking out of
+the loop early stops pulling rows.
+
+It is lazy in the sense the caller cares about, but note that `pdo_pgsql`
+buffers a result set on the client: this does not make an unbounded read of a
+large shard cheap. Give the query a limit, or use `chunkById()` and pay one
+round trip per chunk.
+
+`pluck()` reads whole models rather than the one or two columns asked for. That
+is deliberate — the merge orders by comparing models, so a query ordered by a
+column that was not selected would be merged by a property that is null on
+every row. It costs more than a single-shard `pluck` and is the price of the
+ordering being right.
+
 ### Coroutine execution with Swoole
 
 When the application runs within a Swoole coroutine runtime, read queries that
@@ -354,13 +371,11 @@ Three more consequences worth knowing:
   cannot cross connections. Across two shards such a relation answers only from
   the shard where both rows happen to land — which is to say, by luck. Colocate
   all three tables on the same shard key, or keep them on one connection.
-- **The fan-out covers the methods it overrides, and no others.**
-  `ShardBuilder` overrides `get`, `chunk`, `chunkById`, `paginate`,
-  `firstOrCreate`, `updateOrCreate`, the aggregates and `exists` (v0.3.9), and
-  `update`, `delete`, `forceDelete`, `increment` and `decrement` (v0.3.10).
-  Anything that builds its own SQL and is not on that list still runs on one
-  connection and answers for a fraction of the rows.
-
-  What is still uncovered: **`pluck()` and `cursor()`.** On a colocated
-  relation, which is pinned, both are correct, because the one shard is the
-  right one.
+- **The fan-out covers the methods it overrides, and that list is now
+  complete for ordinary Eloquent.** `get`, `cursor`, `pluck`, `chunk`,
+  `chunkById`, `paginate`, `firstOrCreate`, `updateOrCreate`, the aggregates,
+  `exists`, `update`, `delete`, `forceDelete`, `increment` and `decrement`.
+  What cannot be answered from parts — a grouped or distinct aggregate, a
+  bounded write, a write to the shard key, `upsert`, a join — throws
+  `UnsupportedCrossShardQuery` rather than answering from one shard. Anything
+  reached through `toBase()` bypasses all of this by definition.
