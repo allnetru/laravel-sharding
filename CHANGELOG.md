@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.3.11 - 2026-09-08
+
+### What's Changed
+
+* fix: the fan-out dropped the select list and could not follow the order by @allnetru in https://github.com/allnetru/laravel-sharding/pull/67
+
+Four defects around what a per-shard query is actually asked for. Only one of them needed to become an error; the rest simply work now.
+
+### Fixed
+
+* **`selectRaw()` was dropped whenever the query carried a limit.** The bounded path called `->select($columns)` on each shard with the `['*']` that `get()` defaults to, and `select()` overwrites whatever was there. `selectRaw('*, value * 2 as doubled')->get()` returned the expression; adding `->limit(3)` returned `[null, null, null]`. Working without a limit and failing with one is what kept it hidden. The columns argument now applies only when the query selected nothing of its own — which is what `Query\Builder::get()` does on a single connection.
+  
+* **A narrowed select left the merge with nothing to sort by.** Visible only once the above is fixed, which is why the two ship together: the merge compares *models*, so `select('id', 'label')->orderBy('value')` handed it rows with no `value`, every comparison read null, and the rows came back in shard-visit order. The clobbering bug had been accidentally preventing this by putting the column back.
+  
+  The ordering columns are now added to the select. Rows arrive carrying a column nobody asked for, which is the visible cost and is smaller than an order that quietly does nothing. Skipped when the select holds an expression, since an alias defined in the same select list cannot be re-selected.
+  
+* **`orderByRaw()` read an undefined array key.** It records `['type' => 'Raw', 'sql' => ...]` with no `column`, and `compareModels()` reached for one anyway — an `ErrorException`, followed by a merge in whatever order the shards were visited. The merge can only follow an order that names a column, so a raw order is refused with `UnsupportedCrossShardQuery`. Pinning with `onShardConnection()` allows it, because then the database sorts and nothing is merged.
+  
+* **A qualified order column compared a property no model has.** `orderBy('samples.value')` is now compared on its last segment, which is what the model carries. It was the same silent nothing as the raw order, and it is not refused because it is perfectly answerable.
+  
+* **`truncate()` emptied one shard.** It fans out.
+  
+* **`paginate()` counted the shards one after another,** outside the coroutine dispatcher every other fan-out goes through. The counts are parallel now; the cursors are still opened in order afterwards, because they are consumed lazily and outlive the dispatcher that would have created them.
+  
+
+### Measured, recorded, not fixed
+
+**`whereHas`, `has`, `doesntHave`, `withCount` and `withSum` are correct on a colocated relation and wrong otherwise.** They compile into a correlated subquery that runs on the shard the outer row is on. Under colocation the child rows are on that shard, so the answer is right — that is precisely the cost colocation exists to remove, and it means the common case has been working all along.
+
+When the relation is not colocated the subquery sees only the children that happen to share a shard. Measured on two shards: `whereHas` matched one parent of two, `withCount` returned `[1, 0]` against a truth of `[1, 1]`, and `doesntHave` returned 1 where the answer was 0.
+
+The package can tell the two cases apart from the group configuration, so the next step is to take the correct path automatically and to distribute the other one rather than refuse it.
+
+**Full Changelog**: https://github.com/allnetru/laravel-sharding/compare/v0.3.10...v0.3.11
+
 ## v0.3.10 - 2026-09-08
 
 ### What's Changed
