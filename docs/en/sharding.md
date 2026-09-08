@@ -225,6 +225,36 @@ lazily, and the per-shard copy was built by cloning the query, which carries
 constraints but not scopes. Every fanned-out read therefore returned the rows
 its scopes existed to hide.
 
+### Writes
+
+`update`, `delete`, `forceDelete`, `increment` and `decrement` run on every
+shard and report the rows all of them touched together. `restore()` comes with
+them, because SoftDeletes implements it as an `update`, and a soft delete stays
+soft: the per-shard copy carries the model's global scopes, so registering
+SoftDeletes puts its delete callback back.
+
+**A cross-shard write is not a transaction.** There is no such thing across
+connections. Every shard attempts the write and the first failure is raised
+afterwards, so a partial write is possible — which is worth knowing, and is
+still an improvement on writing to one shard and reporting it as the whole job.
+
+Two shapes are refused with `UnsupportedCrossShardQuery`:
+
+```php
+Ticket::where(...)->limit(5)->update([...]);   // five rows, or five per shard?
+Ticket::where(...)->update(['tenant_id' => 7]); // the row would have to move
+```
+
+A limit means a number of rows, and every shard would apply it in full. A write
+to the shard key would leave the row on a shard its key no longer points at,
+where later reads would never look for it — delete it and create it again
+instead.
+
+`upsert()` is refused outright: each row belongs to the shard its key hashes
+to, so the statement would have to be split per row, and the conflicting row it
+turns on may live on a shard the statement never reaches. Save the models one
+by one, which routes each of them.
+
 ### Coroutine execution with Swoole
 
 When the application runs within a Swoole coroutine runtime, read queries that
@@ -326,14 +356,11 @@ Three more consequences worth knowing:
   all three tables on the same shard key, or keep them on one connection.
 - **The fan-out covers the methods it overrides, and no others.**
   `ShardBuilder` overrides `get`, `chunk`, `chunkById`, `paginate`,
-  `firstOrCreate`, `updateOrCreate`, and — since v0.3.9 — `count`, `sum`,
-  `min`, `max`, `avg`, `average`, `exists` and `doesntExist`. Anything that
-  builds its own SQL and is not on that list still runs on one connection and
-  answers for a fraction of the rows.
+  `firstOrCreate`, `updateOrCreate`, the aggregates and `exists` (v0.3.9), and
+  `update`, `delete`, `forceDelete`, `increment` and `decrement` (v0.3.10).
+  Anything that builds its own SQL and is not on that list still runs on one
+  connection and answers for a fraction of the rows.
 
-  What is still uncovered: **`pluck()`, `cursor()`, `update()`, `delete()`,
-  `increment()`, `decrement()` and `upsert()`.** With forty children split
-  evenly across two shards, `get()` returns forty while `delete()` removes
-  twenty and leaves twenty orphans — and reports twenty, which is the
-  dangerous part. On a colocated relation, which is pinned, all of them are
-  correct, because the one shard is the right one.
+  What is still uncovered: **`pluck()` and `cursor()`.** On a colocated
+  relation, which is pinned, both are correct, because the one shard is the
+  right one.
