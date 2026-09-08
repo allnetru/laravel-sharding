@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.3.10 - 2026-09-08
+
+### What's Changed
+
+* fix: writes ran against one randomly chosen shard by @allnetru in https://github.com/allnetru/laravel-sharding/pull/64
+* fix: cursor() and pluck() read from one shard by @allnetru in https://github.com/allnetru/laravel-sharding/pull/65
+
+This closes defect 2, opened in the v0.3.7 notes. Every ordinary Eloquent read and write on a sharded model now either spans the shards or refuses to answer. Nothing is left silently addressing one of them.
+
+### Fixed
+
+* **Writes ran against one randomly chosen shard.** `update()`, `delete()`, `forceDelete()`, `increment()` and `decrement()` fell through to Eloquent and wrote to a single connection, picked by hashing an identifier `getConnectionName()` generated for the occasion.
+  
+  `delete()` was the dangerous one. On two shards holding four matching rows, `Ticket::where('value', '>', 0)->delete()` removed two, left two, and returned `2` — the count of what it *did* delete. Nothing in the call, the return value or the logs said the job was half done.
+  
+  They now run on every shard and report the rows all of them touched together. `restore()` comes with them, because SoftDeletes implements it as an `update`, and a soft delete stays soft: the per-shard copy carries the model's global scopes as of v0.3.9, so registering SoftDeletes puts its delete callback back. Without that ordering, this change would have turned a soft delete into a hard one on every shard but the first.
+  
+* **A cross-shard write is not a transaction,** and cannot be. Every shard attempts the write and the first failure is raised afterwards, so a partial write is possible. That is documented rather than hidden, and is still an improvement on writing to one shard and reporting it as the whole job.
+  
+* **`cursor()` and `pluck()` read from one shard.** The last two unoverridden reads. `cursor()` now opens a cursor per shard and merges them as they are consumed, so the order is the query's own rather than shard after shard, and breaking out of the loop early stops pulling rows.
+  
+  `pluck()` reads whole models rather than the columns asked for. The merge orders by comparing models, so `orderByDesc('value')->pluck('label')` would otherwise be merged on a `value` that was never selected and is null on every row. It costs more than a single-shard pluck and is the price of the ordering being right.
+  
+* **The merge existed three times over** — inline in `get()`, again in the bounded read, again in `paginate()`. It is now one generator the four callers share, which is what made `cursor()` six lines instead of a fourth copy. `get()` keeps its parallel path: the shards are still read concurrently and the merge runs over what came back.
+  
+
+### Refused rather than answered
+
+`UnsupportedCrossShardQuery` now also covers three write shapes:
+
+* **A limit on a write.** `limit(5)` means five rows; repeated on four shards it means up to twenty, and nothing in the call hints at it. Select the rows first, then write by their keys.
+* **A write to the shard key.** The row would keep sitting on a shard its key no longer points at, and every later read would look elsewhere and miss it. That is a move, not an update.
+* **`upsert()`.** Its rows belong to different shards, so the statement would have to be split per row, and the conflicting row it turns on may live on a shard the statement never reaches — it would insert a duplicate. Save the models one by one, which routes each of them.
+
+A pinned builder keeps the ordinary single-shard behaviour throughout, limits included: the shard was named on purpose, so a limit means what it says.
+
+### Changed
+
+* `docs/en/sharding.md` gains **Writes** and **Streaming and plucking**, and the coverage caveat is rewritten: instead of listing what is still broken, it lists what is covered and what throws. `toBase()` bypasses all of it by definition, which is stated and not worth preventing.
+
+### Coverage
+
+`get`, `cursor`, `pluck`, `chunk`, `chunkById`, `paginate`, `firstOrCreate`, `updateOrCreate`, `count`, `sum`, `min`, `max`, `avg`, `average`, `exists`, `doesntExist`, `update`, `delete`, `forceDelete`, `increment`, `decrement`.
+
+**Full Changelog**: https://github.com/allnetru/laravel-sharding/compare/v0.3.9...v0.3.10
+
 ## v0.3.9 - 2026-09-08
 
 ### What's Changed
