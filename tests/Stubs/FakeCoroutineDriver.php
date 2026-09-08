@@ -23,8 +23,12 @@ final class FakeCoroutineDriver implements CoroutineDriver
 
     /**
      * Flag indicating if the fake is currently within a coroutine scope.
+     *
+     * Public so a test can stand the fake inside a coroutine without having to
+     * start one: that is the Octane request path, and it has to be assertable
+     * separately from the console one.
      */
-    private bool $inCoroutine = false;
+    public bool $inCoroutine = false;
 
     /**
      * @inheritDoc
