@@ -604,6 +604,201 @@ class ShardBuilder extends EloquentBuilder
 
     /**
      * @inheritdoc
+     *
+     * Runs on every shard and reports the rows all of them touched together.
+     * Not one transaction: there is no such thing across connections, and the
+     * dispatcher lets every shard attempt the write before surfacing the first
+     * failure, so a partial write is possible and is the honest outcome. It
+     * beats the previous one, which was to write to a single shard chosen by
+     * hashing an invented identifier and report that as the whole job.
+     */
+    public function update(array $values)
+    {
+        if ($this->singleConnection) {
+            return parent::update($values);
+        }
+
+        $this->refuseBoundedWrite('update');
+        $this->refuseShardKeyChange($values, 'update');
+
+        return $this->writeAcrossShards(static fn (self $builder): int => (int) $builder->update($values));
+    }
+
+    /**
+     * @inheritdoc
+     *
+     * A soft delete stays a soft delete: the per-shard copy is given the
+     * model's global scopes, and registering SoftDeletes re-runs its extend(),
+     * which is what puts the delete callback back on the copy.
+     */
+    public function delete()
+    {
+        if ($this->singleConnection) {
+            return parent::delete();
+        }
+
+        $this->refuseBoundedWrite('delete');
+
+        return $this->writeAcrossShards(static fn (self $builder): int => (int) $builder->delete());
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function forceDelete()
+    {
+        if ($this->singleConnection) {
+            return parent::forceDelete();
+        }
+
+        $this->refuseBoundedWrite('forceDelete');
+
+        return $this->writeAcrossShards(static fn (self $builder): int => (int) $builder->forceDelete());
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function increment($column, $amount = 1, array $extra = [])
+    {
+        if ($this->singleConnection) {
+            return parent::increment($column, $amount, $extra);
+        }
+
+        $this->refuseBoundedWrite('increment');
+        $this->refuseShardKeyChange([$column => $amount] + $extra, 'increment');
+
+        return $this->writeAcrossShards(
+            static fn (self $builder): int => (int) $builder->increment($column, $amount, $extra),
+        );
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function decrement($column, $amount = 1, array $extra = [])
+    {
+        if ($this->singleConnection) {
+            return parent::decrement($column, $amount, $extra);
+        }
+
+        $this->refuseBoundedWrite('decrement');
+        $this->refuseShardKeyChange([$column => $amount] + $extra, 'decrement');
+
+        return $this->writeAcrossShards(
+            static fn (self $builder): int => (int) $builder->decrement($column, $amount, $extra),
+        );
+    }
+
+    /**
+     * @inheritdoc
+     *
+     * Refused rather than fanned out. Every other write here repeats one
+     * statement on each shard, which works because the rows a shard owns are
+     * the rows it should change. An upsert does not fit that: each row belongs
+     * to whichever shard its key hashes to, so the statement would have to be
+     * split per row, and the uniqueness it turns on cannot be enforced across
+     * connections anyway — the conflicting row may sit on a shard this
+     * statement never reaches, and the upsert would insert a duplicate.
+     */
+    public function upsert(array $values, $uniqueBy, $update = null)
+    {
+        if ($this->singleConnection) {
+            return parent::upsert($values, $uniqueBy, $update);
+        }
+
+        throw new UnsupportedCrossShardQuery(sprintf(
+            '%s::upsert() cannot be spread across shards: each row belongs to the shard its key hashes to, and the '
+            . 'conflicting row may live on a shard this statement never reaches. Save the models one by one, which '
+            . 'routes each of them, or pin the call with onShardConnection().',
+            $this->getModel()::class,
+        ));
+    }
+
+    /**
+     * Repeat a write on every shard and add up what each of them touched.
+     *
+     * @param callable(self): int $write
+     * @return int
+     */
+    protected function writeAcrossShards(callable $write): int
+    {
+        return (int) array_sum($this->runOnConnections(
+            fn (string $name): int => $write($this->replicateForConnection($name)),
+        ));
+    }
+
+    /**
+     * Refuse a write the shards would each apply in full.
+     *
+     * `update ... limit 5` means five rows. Repeated on four shards it means
+     * up to twenty, and nothing about the call says so.
+     *
+     * @param string $method
+     * @return void
+     *
+     * @throws UnsupportedCrossShardQuery
+     */
+    protected function refuseBoundedWrite(string $method): void
+    {
+        $query = $this->getQuery();
+
+        if ($query->limit === null && $query->offset === null) {
+            return;
+        }
+
+        throw new UnsupportedCrossShardQuery(sprintf(
+            '%s::%s() cannot carry a limit across shards: every shard would apply it in full, so a limit of %s '
+            . 'would touch that many rows per shard. Select the rows first, then write by their keys.',
+            $this->getModel()::class,
+            $method,
+            var_export($query->limit, true),
+        ));
+    }
+
+    /**
+     * Refuse a write that would move a row to another shard.
+     *
+     * The shard key decides where the row lives. Changing it means deleting
+     * the row here and inserting it there, which is not what an UPDATE does:
+     * the row would keep sitting on a shard its key no longer points at, and
+     * every later read would miss it.
+     *
+     * @param array<string, mixed> $values
+     * @param string $method
+     * @return void
+     *
+     * @throws UnsupportedCrossShardQuery
+     */
+    protected function refuseShardKeyChange(array $values, string $method): void
+    {
+        $model = $this->getModel();
+
+        if (!method_exists($model, 'getShardKey')) {
+            return;
+        }
+
+        $shardKey = $model->getShardKey();
+
+        foreach (array_keys($values) as $column) {
+            $name = last(explode('.', (string) $column));
+
+            if ($name !== $shardKey) {
+                continue;
+            }
+
+            throw new UnsupportedCrossShardQuery(sprintf(
+                '%s::%s() cannot change %s: it is the shard key, and the row would have to move to another '
+                . 'connection. Delete the row and create it again with the new key.',
+                $model::class,
+                $method,
+                $shardKey,
+            ));
+        }
+    }
+
+    /**
+     * @inheritdoc
      */
     public function firstOrCreate(array $attributes = [], Closure|array $values = [])
     {
