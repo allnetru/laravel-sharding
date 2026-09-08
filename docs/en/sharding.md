@@ -213,6 +213,18 @@ Organization::groupBy('x')->having(...)->sum('y');
 Pin such a query with `onShardConnection()`, or give it its shard key, and it
 runs as ordinary Eloquent on the one shard that owns the answer.
 
+### Global scopes
+
+Global scopes are carried to every shard, so `SoftDeletes` hides the same rows
+under a fan-out as it does on one connection, and `withTrashed()` and
+`onlyTrashed()` mean the same thing there too. A scope of your own behaves the
+same way — nothing about it has to know the model is sharded.
+
+This was broken before v0.3.9: scopes live on the builder and are applied
+lazily, and the per-shard copy was built by cloning the query, which carries
+constraints but not scopes. Every fanned-out read therefore returned the rows
+its scopes existed to hide.
+
 ### Coroutine execution with Swoole
 
 When the application runs within a Swoole coroutine runtime, read queries that
