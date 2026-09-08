@@ -3,17 +3,20 @@
 namespace Allnetru\Sharding;
 
 use Allnetru\Sharding\Exceptions\UnsupportedCrossShardQuery;
+use Allnetru\Sharding\Support\Colocation;
 use Allnetru\Sharding\Support\Coroutine\CoroutineDispatcher;
 use ArrayIterator;
 use Closure;
 use Generator;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
+use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Query\Expression;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Pagination\Paginator;
 use Illuminate\Support\LazyCollection;
 use Illuminate\Support\Str;
 use Iterator;
+use Throwable;
 
 /**
  * Eloquent builder that queries across multiple shard connections.
@@ -164,6 +167,130 @@ class ShardBuilder extends EloquentBuilder
         }
 
         return CoroutineDispatcher::run($tasks);
+    }
+
+    /**
+     * @inheritdoc
+     *
+     * Every has/doesntHave/whereHas variant funnels through here, so this is
+     * the one place the relation has to be checked.
+     */
+    public function has($relation, $operator = '>=', $count = 1, $boolean = 'and', ?Closure $callback = null)
+    {
+        if (!$this->singleConnection) {
+            $this->refuseRelationAcrossGroups($relation, 'has');
+        }
+
+        return parent::has($relation, $operator, $count, $boolean, $callback);
+    }
+
+    /**
+     * @inheritdoc
+     *
+     * The funnel for withCount, withSum, withMin, withMax, withAvg and
+     * withExists.
+     */
+    public function withAggregate($relations, $column, $function = null)
+    {
+        if (!$this->singleConnection) {
+            foreach ((array) $relations as $key => $value) {
+                $this->refuseRelationAcrossGroups(
+                    $value instanceof Closure ? $key : $value,
+                    $function === null ? 'withAggregate' : "with{$function}",
+                );
+            }
+        }
+
+        return parent::withAggregate($relations, $column, $function);
+    }
+
+    /**
+     * Refuse a relation whose rows are not on the shard the outer row is on.
+     *
+     * These compile into a correlated subquery, and a subquery runs on the
+     * connection its outer query runs on. Under colocation the related rows
+     * are there and the answer is right — which is the cost colocation exists
+     * to remove, and the reason this is a check rather than a rewrite.
+     *
+     * Across colocation groups the subquery sees whichever related rows
+     * happen to share the shard. Measured on two shards: whereHas matched one
+     * parent of two, and withCount answered [1, 0] where the truth was
+     * [1, 1]. It is refused rather than spread across the shards, for the
+     * same reason a join is: collecting the matching parent keys from every
+     * shard and feeding them back as a whereIn has no bound — the set is
+     * every matching row, not a page — and a cap on it would work in
+     * development and fail in production.
+     *
+     * @param Relation<*, *, *>|string $relation
+     * @param string $method
+     * @return void
+     *
+     * @throws UnsupportedCrossShardQuery
+     */
+    protected function refuseRelationAcrossGroups(Relation|string $relation, string $method): void
+    {
+        foreach ($this->relationChain($relation) as $link) {
+            if ($this->colocation()->holds($link)) {
+                continue;
+            }
+
+            throw new UnsupportedCrossShardQuery(sprintf(
+                '%s::%s() cannot ask about %s across shards: it compiles into a subquery that runs on one '
+                . 'connection, and %s is not colocated with %s, so the subquery would only see the related rows '
+                . 'that happen to share the shard. Colocate the two tables, or ask in two steps: read the keys '
+                . 'first, then filter by them.',
+                $this->getModel()::class,
+                $method,
+                is_string($relation) ? "'{$relation}'" : $link->getRelated()::class,
+                $link->getRelated()::class,
+                $link->getParent()::class,
+            ));
+        }
+    }
+
+    /**
+     * The relations a nested name walks through, in order.
+     *
+     * `whereHas('parcels.buildings')` is two subqueries nested in each other,
+     * and either of them can be the one that crosses groups.
+     *
+     * @param Relation<*, *, *>|string $relation
+     * @return list<Relation<*, *, *>>
+     */
+    protected function relationChain(Relation|string $relation): array
+    {
+        if ($relation instanceof Relation) {
+            return [$relation];
+        }
+
+        $chain = [];
+        $builder = $this;
+
+        foreach (explode('.', $relation) as $name) {
+            // an alias is part of the name only for the aggregate methods
+            $name = trim(explode(' as ', $name, 2)[0]);
+
+            try {
+                $link = $builder->getRelationWithoutConstraints($name);
+            } catch (Throwable) {
+                // not a relation this model has. Laravel raises the useful
+                // error for that, and it should not be pre-empted by ours
+                return $chain;
+            }
+
+            $chain[] = $link;
+            $builder = $link->getRelated()->newQuery();
+        }
+
+        return $chain;
+    }
+
+    /**
+     * @return Colocation
+     */
+    protected function colocation(): Colocation
+    {
+        return app(Colocation::class);
     }
 
     /**
