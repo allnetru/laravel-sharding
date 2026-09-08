@@ -291,6 +291,40 @@ merged in shard-visit order — pin the query with `onShardConnection()` if the
 raw order is what you want. A qualified name is fine: `orderBy('samples.value')`
 is compared as `value`, which is what the model carries.
 
+### Asking about a relation
+
+`whereHas`, `has`, `doesntHave`, `withCount`, `withSum` and their variants
+become a correlated subquery, and a subquery runs on the connection its outer
+query runs on.
+
+**Colocated, so they work.** Two tables are colocated when they resolve a key
+through the same map — the same group, or the same strategy outside one — and
+either share the shard-key column, or the relation joins one shard key to the
+other. Then the related rows are on the shard the outer row is on, the subquery
+reaches all of them, and the answer is the same one an unsharded database would
+give.
+
+```php
+// both sharded by tenant_id, in the same group
+Settlement::whereHas('parcels')->get();
+Settlement::withCount('parcels')->get();
+```
+
+**Not colocated, so they are refused.** The subquery would answer from whichever
+related rows happen to share the shard, silently: measured on two shards,
+`whereHas` matched one parent of two and `withCount` returned `[1, 0]` where the
+truth was `[1, 1]`.
+
+They are refused rather than spread across the shards, and for the same reason a
+`join` is. Collecting the matching parent keys from every shard and feeding them
+back as a `whereIn` has no bound — the set is every matching row, not a page —
+and a cap on it would pass in development and fail in production. Colocate the
+two tables, or ask in two steps: read the keys, then filter by them.
+
+Nested names are checked hop by hop, since either hop can be the one that
+crosses. Pinning with `onShardConnection()` allows all of it, because then there
+is one connection and nothing is being assembled from parts.
+
 ### Coroutine execution with Swoole
 
 When the application runs within a Swoole coroutine runtime, read queries that
@@ -399,11 +433,11 @@ Three more consequences worth knowing:
   a join — throws `UnsupportedCrossShardQuery` rather than answering from one
   shard. Anything reached through `toBase()` bypasses all of this by
   definition.
-- **A correlated subquery is right on a colocated relation and wrong
+- **A correlated subquery is right on a colocated relation, and refused
   otherwise.** `whereHas`, `has`, `doesntHave`, `withCount` and `withSum`
   compile into a subquery that runs on the shard the outer row is on. When the
-  relation is colocated the child rows are on that shard, so the answer is
-  correct — this is the cost colocation exists to remove. When it is not, the
-  subquery sees only the children that happen to share the shard: measured on
-  two shards, `whereHas` matched one parent of two and `withCount` returned
-  `[1, 0]` where the truth was `[1, 1]`. Not yet detected, not yet refused.
+  relation is colocated the child rows are on that shard and the answer is
+  correct — this is the cost colocation exists to remove, and these calls work
+  as they always have. When it is not, the subquery would see only the
+  children that happen to share the shard, so it raises
+  `UnsupportedCrossShardQuery`. See **Asking about a relation** below.
