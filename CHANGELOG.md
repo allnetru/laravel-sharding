@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.3.12 - 2026-09-08
+
+### What's Changed
+
+* fix: relation subqueries answered from one shard without saying so by @allnetru in https://github.com/allnetru/laravel-sharding/pull/69
+
+The last path that could answer from one shard without saying so. With this, nothing in ordinary Eloquent is silently single-shard.
+
+### Fixed
+
+* **`whereHas`, `has`, `doesntHave`, `withCount` and `withSum` answered from one shard across colocation groups.** They compile into a correlated subquery, and a subquery runs on the connection its outer query runs on. Measured on two shards with children deliberately not colocated: `whereHas` matched one parent of two, `withCount` answered `[1, 0]` against a truth of `[1, 1]`, and `doesntHave` answered 1 where the answer was 0.
+  
+  They now raise `UnsupportedCrossShardQuery`. Nested names are checked hop by hop, since either hop can be the one that crosses, and aliases (`withCount('loose as total')`) and closure-keyed aggregates are recognised.
+  
+
+### Not changed, and the reason this is a check rather than a rewrite
+
+**On a colocated relation all of these were already correct**, structurally rather than by luck: the related rows are on the shard the outer row is on, so the subquery reaches all of them. That is the cost colocation exists to remove, and it means the common case — everything inside one group — has been working all along and is untouched.
+
+Five of the ten new tests cover exactly that and pass both before and after. In a schema where a group is colocated throughout, a check written carelessly would have started refusing nearly every relation query in the application.
+
+### Why refused rather than distributed
+
+The distributed form of `whereHas` is to run the subquery across the shards, collect the matching parent keys and feed them back as a `whereIn`. It is correct and it has no bound: the key set is every matching row, not a page. A cap on it would pass in development and fail in production on the same code.
+
+There is also a consistency argument that settles it. `whereHas` across colocation groups is a join wearing a subquery, and this package already refuses joins and through-relations for that reason since v0.3.7.
+
+`withCount` is the more tempting case, because it is bounded by the rows already fetched. Distributing it means suppressing the subselect and filling the attribute in after hydration — which works, but takes the alias out of the SELECT list, so `orderBy('items_count')` and `having` on it stop working and need refusals of their own. That is worth building when someone has a relation of that shape; the refusal is what tells them.
+
+### Added
+
+* `Allnetru\Sharding\Support\Colocation` decides the question from what the models declare, never from a row — it answers for a whole table at once, unlike `ResolvesShard`, which answers for one. Both sides must resolve a key through the same map (the same group, or the same strategy outside one), and then either share the shard-key column or have the relation join one shard key to the other. A pivot or an intermediate table promises nothing about all three tables landing together and is not colocated.
+
+### Changed
+
+* `docs/en/sharding.md` gains **Asking about a relation**: what colocation means here, that the colocated case works, why the other is refused, and the two ways out — colocate the tables, or ask in two steps.
+
+**Full Changelog**: https://github.com/allnetru/laravel-sharding/compare/v0.3.11...v0.3.12
+
 ## v0.3.11 - 2026-09-08
 
 ### What's Changed
