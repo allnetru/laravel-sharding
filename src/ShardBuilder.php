@@ -114,6 +114,8 @@ class ShardBuilder extends EloquentBuilder
             return parent::get($columns);
         }
 
+        $this->refuseUnmergeableOrder('get');
+
         $limit = $this->getQuery()->limit;
         $offset = $this->getQuery()->offset;
 
@@ -162,6 +164,139 @@ class ShardBuilder extends EloquentBuilder
         }
 
         return CoroutineDispatcher::run($tasks);
+    }
+
+    /**
+     * @inheritdoc
+     *
+     * Emptying one shard is not emptying the table.
+     */
+    public function truncate(): void
+    {
+        if ($this->singleConnection) {
+            $this->toBase()->truncate();
+
+            return;
+        }
+
+        $this->runOnConnections(function (string $name): bool {
+            $this->replicateForConnection($name)->toBase()->truncate();
+
+            return true;
+        });
+    }
+
+    /**
+     * Choose the columns for one shard's query.
+     *
+     * Mirrors what Eloquent does on a single connection: the columns passed to
+     * get() apply only when the query selected nothing of its own. Overwriting
+     * unconditionally — which is what this used to do — dropped every
+     * selectRaw() the caller had added, silently and only on the path a limit
+     * takes.
+     *
+     * @param self $builder
+     * @param array<int, mixed> $columns
+     * @return void
+     */
+    protected function applySelect(self $builder, array $columns): void
+    {
+        if ($builder->getQuery()->columns === null) {
+            $builder->select($columns);
+        }
+
+        $this->selectColumnsTheMergeOrdersBy($builder);
+    }
+
+    /**
+     * Add the ordering columns to a narrowed select.
+     *
+     * The merge compares models, so a query that orders by a column it does
+     * not select would be merged on a property that is null on every row —
+     * which reads as "the order was ignored" and is impossible to see from
+     * the outside. The rows come back carrying those columns; that is the
+     * visible cost, and it is smaller than an order that quietly does nothing.
+     *
+     * Skipped when anything in the select is an expression: an alias defined
+     * in the same select list cannot be re-selected, and there is no way to
+     * tell from here whether the ordering column is one.
+     *
+     * @param self $builder
+     * @return void
+     */
+    protected function selectColumnsTheMergeOrdersBy(self $builder): void
+    {
+        $columns = $builder->getQuery()->columns;
+
+        if ($columns === null || $columns === []) {
+            return;
+        }
+
+        foreach ($columns as $column) {
+            if (!is_string($column)) {
+                return;
+            }
+
+            if (str_contains($column, '*')) {
+                return;
+            }
+        }
+
+        $selected = array_map($this->bareColumn(...), $columns);
+
+        foreach ($this->getQuery()->orders ?? [] as $order) {
+            $column = $order['column'];
+            $bare = $this->bareColumn($column);
+
+            if (in_array($bare, $selected, true)) {
+                continue;
+            }
+
+            $builder->addSelect($column);
+            $selected[] = $bare;
+        }
+    }
+
+    /**
+     * A column name without its table.
+     *
+     * @param string $column
+     * @return string
+     */
+    protected function bareColumn(string $column): string
+    {
+        return last(explode('.', $column));
+    }
+
+    /**
+     * Refuse an order the merge cannot reproduce.
+     *
+     * compareModels() reads the ordering column off the models, so it can only
+     * follow an order that names one. `orderByRaw` records no column at all —
+     * reading one produced an undefined key and left the rows in whatever
+     * order the shards happened to be visited, which is the quietest kind of
+     * wrong. An expression is the same case wearing an object.
+     *
+     * @param string $method
+     * @return void
+     *
+     * @throws UnsupportedCrossShardQuery
+     */
+    protected function refuseUnmergeableOrder(string $method): void
+    {
+        foreach ($this->getQuery()->orders ?? [] as $order) {
+            if (isset($order['column']) && is_string($order['column'])) {
+                continue;
+            }
+
+            throw new UnsupportedCrossShardQuery(sprintf(
+                '%s::%s() cannot follow a raw order across shards: the results are merged by comparing the models, '
+                . 'so the order has to name a column. Order by a column name, or pin the query with '
+                . 'onShardConnection().',
+                $this->getModel()::class,
+                $method,
+            ));
+        }
     }
 
     /**
@@ -231,7 +366,8 @@ class ShardBuilder extends EloquentBuilder
         $bound = $this->shardBound($limit, $offset);
 
         foreach ($this->connections() as $name => $config) {
-            $builder = $this->replicateForConnection($name)->select($columns);
+            $builder = $this->replicateForConnection($name);
+            $this->applySelect($builder, $columns);
             $this->applyShardBound($builder, $bound);
             $iterators[$name] = $builder->cursor()->getIterator();
         }
@@ -258,6 +394,8 @@ class ShardBuilder extends EloquentBuilder
         if ($this->singleConnection) {
             return parent::cursor();
         }
+
+        $this->refuseUnmergeableOrder('cursor');
 
         return new LazyCollection(function (): Generator {
             $iterators = [];
@@ -414,6 +552,8 @@ class ShardBuilder extends EloquentBuilder
             return parent::paginate($perPage, $columns, $pageName, $page, $total);
         }
 
+        $this->refuseUnmergeableOrder('paginate');
+
         $page = $page ?: Paginator::resolveCurrentPage($pageName);
         $perPage = $perPage ?: $this->getModel()->getPerPage();
 
@@ -422,11 +562,16 @@ class ShardBuilder extends EloquentBuilder
         $skip = max(0, ($page - 1) * $perPage);
         $bound = $this->shardBound($perPage, $skip);
 
-        foreach ($this->connections() as $name => $config) {
-            // the count has to see the whole shard, the cursor only the rows
-            // this page can reach, so they cannot share a builder
-            $total += $this->replicateForConnection($name)->count();
+        // counted in parallel, like every other fan-out. The cursors are
+        // opened afterwards and in order, because they are consumed lazily
+        // and outlive the dispatcher that would have created them
+        $total += array_sum($this->runOnConnections(
+            fn (string $name): int => (int) $this->replicateForConnection($name)->count(),
+        ));
 
+        foreach ($this->connections() as $name => $config) {
+            // a fresh builder: the count above had to see the whole shard,
+            // this one only the rows the page can reach
             $builder = $this->replicateForConnection($name);
             $this->applyShardBound($builder, $bound);
             $iterators[$name] = $builder->cursor()->getIterator();
@@ -903,7 +1048,11 @@ class ShardBuilder extends EloquentBuilder
             $column = $order['column'];
             $direction = strtolower($order['direction'] ?? 'asc');
 
-            $result = $a->{$column} <=> $b->{$column};
+            // the models carry bare attribute names, so orderBy('t.col')
+            // has to be compared as 'col' rather than as a property nothing has
+            $name = $this->bareColumn($column);
+
+            $result = $a->{$name} <=> $b->{$name};
 
             if ($result === 0) {
                 continue;

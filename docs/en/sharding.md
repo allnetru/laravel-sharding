@@ -272,6 +272,25 @@ column that was not selected would be merged by a property that is null on
 every row. It costs more than a single-shard `pluck` and is the price of the
 ordering being right.
 
+### Selecting and ordering
+
+The columns a query selects for itself are kept: `selectRaw('value * 2 as
+doubled')` reaches every shard whether or not the query carries a limit. The
+columns passed to `get()` apply only when the query selected nothing of its
+own, as on a single connection.
+
+A narrowed select is widened by whatever the query orders by. `select('id',
+'label')->orderBy('value')` comes back carrying `value` as well, because the
+merge compares models and would otherwise sort on a property that is null on
+every row. Rows arriving with a column nobody asked for is the visible cost,
+and it is smaller than an order that quietly does nothing.
+
+For the same reason the order has to name a column. `orderByRaw` records no
+column at all, so it is refused with `UnsupportedCrossShardQuery` rather than
+merged in shard-visit order — pin the query with `onShardConnection()` if the
+raw order is what you want. A qualified name is fine: `orderBy('samples.value')`
+is compared as `value`, which is what the model carries.
+
 ### Coroutine execution with Swoole
 
 When the application runs within a Swoole coroutine runtime, read queries that
@@ -374,8 +393,17 @@ Three more consequences worth knowing:
 - **The fan-out covers the methods it overrides, and that list is now
   complete for ordinary Eloquent.** `get`, `cursor`, `pluck`, `chunk`,
   `chunkById`, `paginate`, `firstOrCreate`, `updateOrCreate`, the aggregates,
-  `exists`, `update`, `delete`, `forceDelete`, `increment` and `decrement`.
-  What cannot be answered from parts — a grouped or distinct aggregate, a
-  bounded write, a write to the shard key, `upsert`, a join — throws
-  `UnsupportedCrossShardQuery` rather than answering from one shard. Anything
-  reached through `toBase()` bypasses all of this by definition.
+  `exists`, `update`, `delete`, `forceDelete`, `increment`, `decrement` and
+  `truncate`. What cannot be answered from parts — a grouped or distinct
+  aggregate, a bounded write, a write to the shard key, `upsert`, a raw order,
+  a join — throws `UnsupportedCrossShardQuery` rather than answering from one
+  shard. Anything reached through `toBase()` bypasses all of this by
+  definition.
+- **A correlated subquery is right on a colocated relation and wrong
+  otherwise.** `whereHas`, `has`, `doesntHave`, `withCount` and `withSum`
+  compile into a subquery that runs on the shard the outer row is on. When the
+  relation is colocated the child rows are on that shard, so the answer is
+  correct — this is the cost colocation exists to remove. When it is not, the
+  subquery sees only the children that happen to share the shard: measured on
+  two shards, `whereHas` matched one parent of two and `withCount` returned
+  `[1, 0]` where the truth was `[1, 1]`. Not yet detected, not yet refused.
