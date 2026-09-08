@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.3.13 - 2026-09-08
+
+### What's Changed
+
+* fix: a console process hung after a cross-shard read by @allnetru in https://github.com/allnetru/laravel-sharding/pull/71
+
+Found on a stand deliberately given a second shard. It cannot be seen reliably on one, and it stops every console process that touches a sharded model without naming its shard.
+
+### Fixed
+
+* **A console process did not exit after a cross-shard read.** `CoroutineDispatcher::run()` started a Swoole scheduler of its own whenever it was called outside an existing coroutine, so the shards would still be read concurrently there too. A process that starts a Swoole event loop does not reliably leave it, and one that does not never exits.
+  
+  Measured on two shards: `php artisan tinker` doing a single `User::count()` returned the right number, wrote its output, and then hung until it was killed. The same script with `SHARDING_COROUTINE_DRIVER=sync` exits 0, and an artisan command performing no fan-out exits 0 — it is the fan-out that leaves the process alive.
+  
+  `isSupported()` cannot prevent it: it checks that the extension is loaded, which is also true in a console process. Having the extension is not the same as being inside a server driving the loop, and the one thing that tells them apart is whether we are in a coroutine already.
+  
+  **This matters more than it looks.** Everything operational goes through artisan — post-deploy steps, the scheduler, seeders. A deploy step that hangs forever is a deploy that never finishes; a scheduled command that hangs is one worker gone per tick.
+  
+* **Outside a coroutine the tasks now run sequentially.** Nothing is lost where it matters: Octane's Swoole handler runs a request inside a coroutine, so the fan-out on the path that serves people is still concurrent — that is the case the concurrency was written for. A migration, a seeder or a scheduled command pays one round trip per shard and, in exchange, finishes.
+  
+
+### Changed
+
+* The test asserting the old behaviour is **reversed rather than deleted**, and its docblock says why the decision changed, so the next reader does not restore it as a regression. A second test pins the half that must not be lost — concurrent dispatch inside a coroutine.
+  
+* `docs/en/sharding.md` no longer says the dispatcher "boots a lightweight coroutine scheduler so queries still complete in parallel".
+  
+
+**Full Changelog**: https://github.com/allnetru/laravel-sharding/compare/v0.3.12...v0.3.13
+
 ## v0.3.12 - 2026-09-08
 
 ### What's Changed
