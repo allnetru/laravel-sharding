@@ -2,6 +2,7 @@
 
 namespace Allnetru\Sharding;
 
+use Allnetru\Sharding\Exceptions\UnsupportedCrossShardQuery;
 use Allnetru\Sharding\Support\Coroutine\CoroutineDispatcher;
 use Closure;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
@@ -378,6 +379,200 @@ class ShardBuilder extends EloquentBuilder
             'path' => Paginator::resolveCurrentPath(),
             'pageName' => $pageName,
         ]);
+    }
+
+    /**
+     * @inheritdoc
+     *
+     * Counts add up, so the shards are counted and the counts are summed.
+     * Replicas are excluded by replicateForConnection(), without which a row
+     * copied onto a second shard would be counted twice.
+     */
+    public function count($columns = '*')
+    {
+        if ($this->singleConnection) {
+            return parent::count($columns);
+        }
+
+        $this->refuseUncombinableAggregate('count');
+
+        return (int) array_sum($this->runOnConnections(
+            fn (string $name): int => (int) $this->replicateForConnection($name)->count($columns),
+        ));
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function sum($column)
+    {
+        if ($this->singleConnection) {
+            return parent::sum($column);
+        }
+
+        $this->refuseUncombinableAggregate('sum');
+
+        return array_sum($this->runOnConnections(
+            fn (string $name) => $this->replicateForConnection($name)->sum($column),
+        ));
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function min($column)
+    {
+        if ($this->singleConnection) {
+            return parent::min($column);
+        }
+
+        return $this->extremeAcrossShards('min', $column);
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function max($column)
+    {
+        if ($this->singleConnection) {
+            return parent::max($column);
+        }
+
+        return $this->extremeAcrossShards('max', $column);
+    }
+
+    /**
+     * @inheritdoc
+     *
+     * Deliberately not the average of the averages: that is only the average
+     * when every shard holds the same number of rows, and shards do not. The
+     * sums and the counts are collected instead and divided once.
+     *
+     * The divisor counts the column rather than the rows, because SQL AVG
+     * ignores nulls and this has to answer what AVG would have answered.
+     */
+    public function avg($column)
+    {
+        if ($this->singleConnection) {
+            return parent::avg($column);
+        }
+
+        $this->refuseUncombinableAggregate('avg');
+
+        $parts = $this->runOnConnections(function (string $name) use ($column): array {
+            $builder = $this->replicateForConnection($name);
+
+            return ['sum' => $builder->sum($column), 'count' => (int) $builder->count($column)];
+        });
+
+        $counted = array_sum(array_column($parts, 'count'));
+
+        if ($counted === 0) {
+            return null;
+        }
+
+        return array_sum(array_column($parts, 'sum')) / $counted;
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function average($column)
+    {
+        return $this->avg($column);
+    }
+
+    /**
+     * @inheritdoc
+     *
+     * One shard is enough to answer yes, and every shard has to be asked
+     * before answering no.
+     */
+    public function exists()
+    {
+        if ($this->singleConnection) {
+            return parent::exists();
+        }
+
+        $answers = $this->runOnConnections(
+            fn (string $name): bool => (bool) $this->replicateForConnection($name)->exists(),
+        );
+
+        return in_array(true, $answers, true);
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function doesntExist()
+    {
+        if ($this->singleConnection) {
+            return parent::doesntExist();
+        }
+
+        return !$this->exists();
+    }
+
+    /**
+     * The smallest of the smallest, or the largest of the largest.
+     *
+     * @param 'min'|'max' $function
+     * @param string $column
+     * @return mixed
+     */
+    protected function extremeAcrossShards(string $function, string $column)
+    {
+        $this->refuseUncombinableAggregate($function);
+
+        $values = array_filter(
+            $this->runOnConnections(
+                fn (string $name) => $this->replicateForConnection($name)->{$function}($column),
+            ),
+            static fn ($value): bool => $value !== null,
+        );
+
+        if ($values === []) {
+            return null;
+        }
+
+        return $function === 'min' ? min($values) : max($values);
+    }
+
+    /**
+     * Refuse an aggregate whose shards cannot be added back together.
+     *
+     * Everything here has the same shape: the shard's answer is not a part of
+     * the whole answer, it is an answer to a different question. Summing those
+     * produces a number that looks plausible and is wrong, which is the one
+     * outcome worth throwing over.
+     *
+     * @param string $method
+     * @return void
+     *
+     * @throws UnsupportedCrossShardQuery
+     */
+    protected function refuseUncombinableAggregate(string $method): void
+    {
+        $query = $this->getQuery();
+
+        $reason = match (true) {
+            !empty($query->groups) => 'a grouped aggregate has one value per group, and a group may have rows on several shards',
+            !empty($query->havings) => 'having filters groups, and a group may have rows on several shards',
+            $query->distinct !== false => 'a distinct aggregate would count a value once for every shard that holds it',
+            !empty($query->unions) => 'a union is resolved by the connection it runs on',
+            default => null,
+        };
+
+        if ($reason === null) {
+            return;
+        }
+
+        throw new UnsupportedCrossShardQuery(sprintf(
+            '%s::%s() cannot be combined across shards: %s. Give the query its shard key, or pin it with onShardConnection().',
+            $this->getModel()::class,
+            $method,
+            $reason,
+        ));
     }
 
     /**
