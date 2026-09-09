@@ -362,6 +362,20 @@ class ShardDistributeTest extends TestCase
     }
 
     /**
+     * A method by that name is not the trait, and this command is destructive.
+     *
+     * `method_exists` accepted any model with a domain method called
+     * `getShardKey()` and then rewrote where its rows live, using the global
+     * fallback configuration. Found in review.
+     *
+     * @return void
+     */
+    public function testAModelThatMerelyHasTheMethodIsRefused(): void
+    {
+        $this->artisan('shards:distribute', ['model' => [Decoy::class]])->assertFailed();
+    }
+
+    /**
      * The shard a key names, and one it does not.
      *
      * @param int $key The shard key value.
@@ -407,6 +421,30 @@ class HolderNote extends Model
     protected $guarded = [];
 
     protected $casts = ['is_replica' => 'bool'];
+}
+
+/**
+ * Not shardable, and saying otherwise loudly.
+ */
+class Decoy extends Model
+{
+    protected $table = 'holders';
+
+    public $incrementing = false;
+
+    public $timestamps = false;
+
+    protected $guarded = [];
+
+    /**
+     * A domain method that happens to share the trait's name.
+     *
+     * @return string
+     */
+    public function getShardKey(): string
+    {
+        return 'id';
+    }
 }
 
 class PlainRow extends Model

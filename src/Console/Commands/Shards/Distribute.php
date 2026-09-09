@@ -163,7 +163,15 @@ class Distribute extends Command
                 return null;
             }
 
-            if (!method_exists($model, 'getShardKey')) {
+            /*
+            | Asked of the manager and not only of the class. `method_exists`
+            | alone accepts any model that happens to have a domain method by
+            | that name, and this command rewrites where rows live; the
+            | manager checks for the trait itself. The second half of the
+            | condition is what is about to be called, and it is also what
+            | tells the analyser this model has it.
+            */
+            if (!$manager->isShardable($model) || !method_exists($model, 'getShardKey')) {
                 $this->error($model::class . ' is not shardable: it does not use the Shardable trait.');
 
                 return null;

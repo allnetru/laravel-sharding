@@ -81,6 +81,36 @@ Available strategies include:
 
 Only strategies that support rebalancing can be used with the `shards:rebalance` command.
 
+#### Writing your own
+
+`Allnetru\Sharding\Strategies\Strategy` is the contract, and `Rebalanceable`
+is the trait that implements the move for you.
+
+**The `rebalance()` signature changed in 0.5.0 and a custom strategy has to
+follow it.** It now takes the shard key and the row key separately:
+
+```php
+public function rebalance(
+    string $table,
+    string $shardKey,   // decides which connection a row belongs on
+    string $rowKey,     // identifies one row
+    ?string $from,
+    ?string $to,
+    ?int $start,
+    ?int $end,
+    array $config,
+): void;
+```
+
+One key could not serve both. On a colocated one-to-many table — several
+`user_roles` rows sharing one `user_id` — using the shard key for identity
+means `where('user_id', ...)->delete()` after moving a single row, which
+removes every other role that user has. Getting the routing wrong loses a
+row's location; getting the identity wrong loses the row.
+
+The range bounds `--start` and `--end` apply to the shard key, and paging,
+existence checks, updates and deletes to the row key.
+
 ### ID generation
 
 Unique identifiers are generated using strategies defined in `config/sharding.php`.
@@ -98,8 +128,12 @@ A table may override the generator via the `id_generator` option in its configur
    php artisan shards:rebalance items --from=shard-1 --to=shard-10
    ```
 
-   Use `--start` and `--end` to limit the ID range. Supported strategies update any
-   metadata, such as Redis mappings, during the move.
+   Use `--start` and `--end` to limit the range. **They bound the shard key, not
+   the primary key** — for a colocated table those are different columns, and
+   the shard key is what decides which connection a row belongs on. On
+   `user_roles`, keyed by `user_id`, a range picks users and moves every role
+   each of them has. Supported strategies update any metadata, such as Redis
+   mappings, during the move.
 
 4. After all data is copied, remove the shard from `DB_SHARDS` and clear
    `DB_SHARD_MIGRATIONS`.
