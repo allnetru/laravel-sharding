@@ -2,10 +2,13 @@
 
 namespace Allnetru\Sharding\Tests\Feature;
 
+use Allnetru\Sharding\Exceptions\RebalanceIncomplete;
 use Allnetru\Sharding\ShardingManager;
 use Allnetru\Sharding\Strategies\Rebalanceable;
 use Allnetru\Sharding\Strategies\Strategy;
+use Allnetru\Sharding\Strategies\SupportsAfterRebalance;
 use Allnetru\Sharding\Tests\TestCase;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -126,12 +129,20 @@ class ShardRebalanceKeysTest extends TestCase
             'is_replica' => false,
         ]);
 
-        $moved = $this->strategy()->rebalance('grants', 'user_id', 'id', $source, null, null, null, [
-            'connections' => config('sharding.connections'),
-            'table' => 'grants',
-        ]);
+        $strategy = $this->strategy();
 
-        $this->assertSame(0, $moved, 'the row was reported as moved');
+        try {
+            $strategy->rebalance('grants', 'user_id', 'id', $source, null, null, null, [
+                'connections' => config('sharding.connections'),
+                'table' => 'grants',
+            ]);
+
+            $this->fail('a refused row was reported as a successful rebalance');
+        } catch (RebalanceIncomplete $e) {
+            $this->assertSame(1, $e->failed);
+            $this->assertSame(0, $e->moved);
+        }
+
         $this->assertSame(
             'mine',
             DB::connection($source)->table('grants')->where('id', 1)->value('role'),
@@ -142,6 +153,10 @@ class ShardRebalanceKeysTest extends TestCase
             DB::connection($target)->table('grants')->where('id', 1)->value('role'),
             'a different row was overwritten',
         );
+
+        // the half that makes the refusal matter: handing the range to the new
+        // connection while a row is still on the old one is what loses it
+        $this->assertFalse($strategy->handedOver, 'the routing was advanced over a row left behind');
     }
 
     /**
@@ -181,14 +196,67 @@ class ShardRebalanceKeysTest extends TestCase
     }
 
     /**
+     * The command says it failed when a row was left behind.
+     *
+     * The counter was private to the trait, so `rebalance()` returned zero
+     * moved and the command printed «Moved 0 records» and exited
+     * successfully — over rows that are still on the connection the run was
+     * asked to empty. Found in review.
+     *
+     * @return void
+     */
+    public function testTheCommandFailsWhenARowIsRefused(): void
+    {
+        config([
+            'sharding.strategies.grants_hash' => GrantsStrategy::class,
+            'sharding.tables.grants.strategy' => 'grants_hash',
+        ]);
+        app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
+
+        $target = app(ShardingManager::class)->connectionFor('grants', 1)[0];
+        $source = $target === 'shard_1' ? 'shard_2' : 'shard_1';
+
+        DB::connection($source)->table('grants')->insert([
+            'id' => 1,
+            'user_id' => 1,
+            'role' => 'mine',
+            'is_replica' => false,
+        ]);
+        DB::connection($target)->table('grants')->insert([
+            'id' => 1,
+            'user_id' => 99,
+            'role' => 'somebody else',
+            'is_replica' => false,
+        ]);
+
+        $this->artisan('shards:rebalance', ['model' => Grant::class, '--from' => $source])
+            ->assertFailed();
+    }
+
+    /**
      * A strategy using the trait, routing through the manager.
      *
      * @return Strategy
      */
     protected function strategy(): Strategy
     {
-        return new class() implements Strategy {
+        return new class() implements Strategy, SupportsAfterRebalance {
             use Rebalanceable;
+
+            /** Whether the routing was handed over to the new connection. */
+            public bool $handedOver = false;
+
+            public function afterRebalance(
+                string $table,
+                string $shardKey,
+                ?string $from,
+                ?string $to,
+                ?int $start,
+                ?int $end,
+                array $config
+            ): void {
+                $this->handedOver = true;
+            }
 
             public function determine(mixed $key, array $config): array
             {
@@ -208,5 +276,69 @@ class ShardRebalanceKeysTest extends TestCase
             {
             }
         };
+    }
+}
+
+/**
+ * The colocated table under test.
+ */
+class Grant extends Model
+{
+    protected $table = 'grants';
+
+    protected string $shardKey = 'user_id';
+
+    public $incrementing = false;
+
+    public $timestamps = false;
+
+    protected $guarded = [];
+}
+
+/**
+ * The same strategy the tests build by hand, reachable from the config.
+ */
+class GrantsStrategy implements Strategy
+{
+    use Rebalanceable;
+
+    /**
+     * @param mixed $key
+     * @param array<string, mixed> $config
+     * @return array<int, string>
+     */
+    public function determine(mixed $key, array $config): array
+    {
+        $names = array_keys((array) ($config['connections'] ?? []));
+
+        return [$names[((int) $key) % max(1, count($names))]];
+    }
+
+    /**
+     * @return bool
+     */
+    public function canRebalance(): bool
+    {
+        return true;
+    }
+
+    /**
+     * @param mixed $key
+     * @param array<int, string> $connections
+     * @param array<string, mixed> $config
+     * @return void
+     */
+    public function recordMeta(mixed $key, array $connections, array $config): void
+    {
+    }
+
+    /**
+     * @param mixed $key
+     * @param string $connection
+     * @param array<string, mixed> $config
+     * @return void
+     */
+    public function recordReplica(mixed $key, string $connection, array $config): void
+    {
     }
 }

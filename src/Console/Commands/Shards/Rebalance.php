@@ -3,6 +3,7 @@
 namespace Allnetru\Sharding\Console\Commands\Shards;
 
 use Allnetru\Sharding\Console\Commands\Shards\Concerns\ResolvesShardModel;
+use Allnetru\Sharding\Exceptions\RebalanceIncomplete;
 use Allnetru\Sharding\ShardingManager;
 use Illuminate\Console\Command;
 
@@ -93,16 +94,28 @@ class Rebalance extends Command
         $shardKey = method_exists($model, 'getShardKey') ? $model->getShardKey() : $model->getKeyName();
         $rowKey = $model->getKeyName();
 
-        $moved = $strategy->rebalance(
-            $table,
-            $shardKey,
-            $rowKey,
-            $from,
-            $to,
-            $start !== null ? (int) $start : null,
-            $end !== null ? (int) $end : null,
-            $config,
-        );
+        try {
+            $moved = $strategy->rebalance(
+                $table,
+                $shardKey,
+                $rowKey,
+                $from,
+                $to,
+                $start !== null ? (int) $start : null,
+                $end !== null ? (int) $end : null,
+                $config,
+            );
+        } catch (RebalanceIncomplete $e) {
+            /*
+            | Caught rather than left to bubble, so the operator gets the
+            | sentence instead of a stack trace — but the status is a failure,
+            | because rows are still on the connection this run was meant to
+            | empty and the routing was deliberately not advanced.
+            */
+            $this->error($e->getMessage());
+
+            return self::FAILURE;
+        }
 
         $this->info("Moved {$moved} records.");
 

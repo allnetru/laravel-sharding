@@ -505,6 +505,25 @@ class ShardDistributeTest extends TestCase
     }
 
     /**
+     * An active shard whose table lacks the shard-key column is refused too.
+     *
+     * The same argument as the missing table, one column down: skipping such a
+     * connection leaves it in the destination pool, so a row from elsewhere
+     * gets routed there and the insert carries a column the table has not got
+     * — after earlier rows have already been written. Found in review.
+     *
+     * @return void
+     */
+    public function testAnActiveShardWithoutTheShardKeyColumnIsRefused(): void
+    {
+        Schema::connection('shard_2')->table('holder_notes', function (Blueprint $table): void {
+            $table->dropColumn('holder_id');
+        });
+
+        $this->artisan('shards:distribute', ['model' => [HolderNote::class]])->assertFailed();
+    }
+
+    /**
      * A shard being prepared is skipped rather than refused.
      *
      * @return void

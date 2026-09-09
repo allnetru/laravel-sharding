@@ -111,6 +111,15 @@ row's location; getting the identity wrong loses the row.
 The range bounds `--start` and `--end` apply to the shard key, and paging,
 existence checks, updates and deletes to the row key.
 
+**A run that leaves any row behind raises `RebalanceIncomplete` rather than
+returning a count**, and skips `afterRebalance()`. That hook is where a range
+strategy hands the range over to the new connection, and doing it while rows
+are still on the old one is exactly what makes them unreachable: the routing
+names one shard, the data is on another, and retiring the old one loses it. The
+count alone could not carry this — zero moved reads the same whether there was
+nothing to do or everything was refused. `shards:rebalance` catches it, prints
+the reason and exits non-zero.
+
 ### ID generation
 
 Unique identifiers are generated using strategies defined in `config/sharding.php`.

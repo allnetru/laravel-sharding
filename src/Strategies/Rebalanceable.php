@@ -3,6 +3,7 @@
 namespace Allnetru\Sharding\Strategies;
 
 use Allnetru\Sharding\Contracts\MetricServiceInterface;
+use Allnetru\Sharding\Exceptions\RebalanceIncomplete;
 use Allnetru\Sharding\ShardingManager;
 use Allnetru\Sharding\Support\RowComparison;
 use Illuminate\Support\Facades\DB;
@@ -163,7 +164,14 @@ trait Rebalanceable
             }, $rowKey);
         }
 
-        if ($this instanceof SupportsAfterRebalance) {
+        /*
+        | Only when everything arrived. `afterRebalance()` is where a range
+        | strategy hands the range over to the new connection, and doing that
+        | while rows are still on the old one is precisely what makes them
+        | unreachable: the routing says one shard, the data is on another, and
+        | retiring the old one loses it.
+        */
+        if ($failed === 0 && $this instanceof SupportsAfterRebalance) {
             $this->afterRebalance($table, $shardKey, $from, $to, $start, $end, $config);
         }
 
@@ -177,6 +185,16 @@ trait Rebalanceable
             $metrics = app(MetricServiceInterface::class);
             $metrics->increment('sharding.rebalance.success', $moved);
             $metrics->increment('sharding.rebalance.failed', $failed);
+        }
+
+        /*
+        | Raised rather than returned, because the count alone cannot say it:
+        | zero moved reads the same whether there was nothing to do or
+        | everything was refused, and the caller that cannot tell those apart
+        | reports success either way.
+        */
+        if ($failed > 0) {
+            throw new RebalanceIncomplete($table, $moved, $failed);
         }
 
         return $moved;

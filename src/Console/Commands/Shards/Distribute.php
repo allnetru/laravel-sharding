@@ -234,9 +234,26 @@ class Distribute extends Command
                 }
 
                 if (!Schema::connection($source)->hasColumn($table, $key)) {
-                    $this->warn("Skipping {$table} on {$source}: it has no {$key} column.");
+                    /*
+                    | The same argument as the missing table, one column down.
+                    | Skipping such a connection leaves it in the destination
+                    | pool, so a row from elsewhere gets routed there and the
+                    | insert carries a column the table has not got — after
+                    | earlier rows have already been written.
+                    */
+                    if (array_key_exists($source, $underMigration)) {
+                        $this->warn("Skipping {$table} on {$source}: it has no {$key} column.");
 
-                    continue;
+                        continue;
+                    }
+
+                    $this->error(
+                        "{$source}.{$table} has no {$key} column, and {$source} is not listed in "
+                        . 'DB_SHARD_MIGRATIONS. Rows would be routed to it and the insert would carry a '
+                        . 'column it has not got. Migrate it first, or exclude it while it is being prepared.',
+                    );
+
+                    return null;
                 }
 
                 $sources[] = $source;
