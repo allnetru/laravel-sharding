@@ -46,7 +46,7 @@ interface Strategy
     /**
      * Move records between shards.
      *
-     * **Takes every table of a colocation group at once.** The routing a
+     * Takes every table of a colocation group at once. The routing a
      * rebalance hands over belongs to the group, not to a table: moving one
      * table's rows and redirecting the key sends every sibling's reads to the
      * new connection while their rows are still on the old one. So the tables

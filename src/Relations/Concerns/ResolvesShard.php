@@ -91,8 +91,8 @@ trait ResolvesShard
      * not the related row's, which is exactly the substitution that made this
      * wrong before.
      *
-     * **The second shape carries a precondition, and it is the precondition
-     * colocation already is:** the two rows must share the shard key's *value*,
+     * The second shape carries a precondition, and it is the precondition
+     * colocation already is: the two rows must share the shard key's *value*,
      * not merely the column's name. A foreign key from one tenant's row to
      * another tenant's row is outside the design — the rows are on different
      * shards by construction — and this pins the query to the source's shard,

@@ -111,6 +111,35 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Routing cache
+    |--------------------------------------------------------------------------
+    |
+    | Where a slot's rows live, remembered so the question is not asked per
+    | query. A strategy that keeps its routing in a table — db_hash_range —
+    | looked the slot up on the metadata connection before every pinned read,
+    | which on two shards made the pinned read slower than the fan-out it
+    | replaced: three round trips in sequence against two in parallel.
+    |
+    | Written through whenever the strategy changes the routing itself, so the
+    | cache lags the metadata by one write across every process sharing the
+    | store; namespaced by the connection list, so adding a shard is a new
+    | namespace rather than a window of stale answers. A store that cannot be
+    | reached is simply not consulted.
+    |
+    | `store` names a cache store from config/cache.php; null means the
+    | default one. Prefer something in memory and shared — Redis or Valkey.
+    | `ttl` is in seconds and only bounds how long an entry nobody has written
+    | through survives.
+    |
+    */
+    'routing_cache' => [
+        'enabled' => (bool) env('SHARDING_ROUTING_CACHE', true),
+        'store' => env('SHARDING_ROUTING_CACHE_STORE'),
+        'ttl' => (int) env('SHARDING_ROUTING_CACHE_TTL', 300),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Coroutine Drivers
     |--------------------------------------------------------------------------
     |

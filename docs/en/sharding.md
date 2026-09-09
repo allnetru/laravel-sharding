@@ -258,6 +258,50 @@ A table may override the generator via the `id_generator` option in its configur
 4. After all data is copied, remove the shard from `DB_SHARDS` and clear
    `DB_SHARD_MIGRATIONS`.
 
+## What a query costs
+
+Sharding is a promise about round trips: a read that names its key touches the
+one connection that holds it and nothing else. The promise is easy to keep in
+the SQL and easy to break in the trips around it, so the package asserts a
+budget in its own tests — per connection, on the warm path — and this is what
+it holds to:
+
+| Operation | Shard queries | Metadata queries |
+|---|---|---|
+| `Model::query()` | 0 | 0 |
+| `Model::where(shardKey, v)->get()` | 1 | 0 |
+| `Model::create([...shardKey => v])`, slot already known | 1 | 0 |
+| `firstOrCreate([shardKey => v, ...])`, row exists | 1 | 0 |
+| a key the routing has never seen | 1 | 1, once |
+
+Three things had to change for that table to be true, and each of them was
+invisible in the SQL a developer looks at.
+
+**A keyless model is given a grammar, not a route.** Eloquent asks the model for
+its connection whenever it builds a query builder, and the trait used to answer
+by generating a key and resolving the shard for it — a metadata round trip per
+`Model::query()`, spent on a connection `ShardBuilder` then decides for itself.
+The first configured connection answers now; placement is decided only when a
+row is written.
+
+**Routing is cached.** `db_hash_range` keeps its slots in a table on the
+metadata connection, so a pinned read paid a lookup there before it could run —
+which on two shards made it slower than the fan-out it replaced. The lookup is
+remembered in the cache store named by `sharding.routing_cache`, written through
+by `recordMeta()` and `rowMoved()` whenever the strategy changes the routing
+itself, and namespaced by the connection list so a change of topology is a new
+namespace rather than a window of stale answers. A store that cannot be reached
+is not consulted.
+
+**Recording a slot is skipped when the cache already says so.** The `created`
+hook records the slot after every insert, in a transaction with a locked read;
+when the cache holds exactly the placement about to be written there is nothing
+to write.
+
+`db_range` is not cached: a rebalance can re-home a sub-range of one of its
+ranges, so a key's range cannot be named without asking. `redis` is a cache
+already.
+
 ## Groups
 
 Tables can be grouped so related records share the same shard. Configure the group in `config/sharding.php`:

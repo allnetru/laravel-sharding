@@ -21,5 +21,10 @@ abstract class TestCase extends OrchestraTestCase
             'database' => ':memory:',
             'prefix' => '',
         ]);
+
+        // the routing cache in memory and per test: the default file store
+        // would carry one test's placements into the next
+        $app['config']->set('cache.default', 'array');
+        $app['config']->set('sharding.routing_cache.store', 'array');
     }
 }

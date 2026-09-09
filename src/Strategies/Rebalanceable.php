@@ -14,7 +14,7 @@ use InvalidArgumentException;
 /**
  * Shared logic for moving rows between shard connections.
  *
- * **A whole colocation group at once.** The routing a rebalance hands over is
+ * A whole colocation group at once. The routing a rebalance hands over is
  * the group's — `rowMoved()` and `afterRebalance()` write it under the group
  * owner — so moving one table's rows and redirecting the key sends every
  * sibling table's reads to the new connection while their rows are still on
@@ -22,7 +22,7 @@ use InvalidArgumentException;
  * come as a list, every pass below runs across all of them, and the routing
  * changes once, after every table's rows have arrived.
  *
- * **Two keys per table, and they are not interchangeable.** The shard key is
+ * Two keys per table, and they are not interchangeable. The shard key is
  * what a slot is computed from, so it is what the range filter and the
  * routing use. The row key is what identifies one row, so it is what the
  * insert, the update, the delete and the paging use. On a colocated
@@ -31,7 +31,7 @@ use InvalidArgumentException;
  * single row, which deletes every other role that user had. Routing by the
  * wrong key misplaces rows; identifying by the wrong key destroys them.
  *
- * **Several passes, and the first ones write nothing.** A rebalance is not one
+ * Several passes, and the first ones write nothing. A rebalance is not one
  * operation but two that have to agree: rows move, and the metadata saying
  * where a key lives moves with them. Doing the second while the first only
  * partly happened is what makes rows unreachable — and either direction does
@@ -47,7 +47,7 @@ use InvalidArgumentException;
  * says so. Re-running finishes the job: every pass reads the state off the
  * data rather than off a memory of what this run did, so a rerun redirects
  * what needs redirecting and writes what is missing, whoever moved the rows
- * and whenever. **A rebalance is run with `SHARDING_PIN_BY_KEY=false`**, which
+ * and whenever. A rebalance is run with `SHARDING_PIN_BY_KEY=false`, which
  * is what makes that window safe — an unpinned read finds a row wherever it
  * currently is.
  */
@@ -405,7 +405,7 @@ trait Rebalanceable
      * table may not exist yet, and a scan across the whole topology then died
      * on an unknown table before anything had moved.
      *
-     * **Only those.** An active connection whose table is absent is not
+     * Only those. An active connection whose table is absent is not
      * skipped, because skipping it does not stop `connectionFor()` naming it
      * as a destination — the rows would move, the routing would be handed
      * over, and the placement pass would then die on the missing table with
@@ -454,7 +454,7 @@ trait Rebalanceable
     /**
      * How many keys this run would move only part of.
      *
-     * **The split the primary-key preflight cannot see.** That one asks
+     * The split the primary-key preflight cannot see. That one asks
      * whether two connections hold the same *row*; this asks whether they hold
      * the same *key*, which on a colocated group they can do with entirely
      * different rows — a user on one connection and one of their roles on
@@ -563,8 +563,8 @@ trait Rebalanceable
     /**
      * Which keys the routing is wrong about, read off the data itself.
      *
-     * **Derived rather than remembered, and that is what makes a rerun finish
-     * the job.** A record of what this run moved is a record of what happened
+     * Derived rather than remembered, and that is what makes a rerun finish
+     * the job. A record of what this run moved is a record of what happened
      * rather than of what is true: a transient failure partway through the
      * move, or a `rowMoved()` that threw, leaves rows on the new connection
      * with the routing naming the old one — and a rerun, seeing nothing left
@@ -631,8 +631,8 @@ trait Rebalanceable
     /**
      * Hand each key's routing over.
      *
-     * **This is the one step that cannot be undone by re-running, only
-     * finished.** By the time it runs the source copies are gone, so a
+     * This is the one step that cannot be undone by re-running, only
+     * finished. By the time it runs the source copies are gone, so a
      * `rowMoved()` that throws — a Redis or metadata-database outage in the
      * window — leaves the rows on the new connection and the routing pointing
      * at the old one. There is no ordering that avoids it: handing the routing
@@ -682,11 +682,11 @@ trait Rebalanceable
     /**
      * Make the copies of every key of one table match what the routing says.
      *
-     * **A pass over the range, not a step tied to what this run moved.** What
+     * A pass over the range, not a step tied to what this run moved. What
      * has to be true afterwards is a property of the data, so it is checked
      * against the data: for every primary row in the range, each connection
      * the placement names holds a copy marked as a replica. An absent copy is
-     * written, an identical one left alone, and a **different** row under that
+     * written, an identical one left alone, and a different row under that
      * identifier left exactly where it is and counted as a failure — it is
      * somebody's data, and the routing is meanwhile advertising it as this
      * row's copy.
@@ -889,8 +889,8 @@ trait Rebalanceable
      * Without an explicit target this is the tail of the placement the routing
      * gives — the connections the key's replicas belong on.
      *
-     * **With `--to` it cannot be, and deriving it from that one-element array
-     * deleted a copy the metadata still advertised.** The operator names the
+     * With `--to` it cannot be, and deriving it from that one-element array
+     * deleted a copy the metadata still advertised. The operator names the
      * primary; the strategy decides what the replicas become, and both
      * `RedisStrategy` and `DbHashRangeStrategy` promote the old primary into
      * the replica list when the target used to be one of its replicas. So the

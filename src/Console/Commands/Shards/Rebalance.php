@@ -12,7 +12,7 @@ use InvalidArgumentException;
 /**
  * Move records between shard connections.
  *
- * **Takes model classes, one per table of the colocation group.** A model
+ * Takes model classes, one per table of the colocation group. A model
  * rather than a table name, for the two reasons `shards:distribute` takes it:
  * the table name alone cannot find the model on any application that keeps
  * its models outside `App\Models`, and only the model knows which column its
@@ -26,7 +26,7 @@ use InvalidArgumentException;
  * left out — it has nothing to strand — so a group whose later tables are
  * configured before they exist is still workable.
  *
- * `--start` and `--end` bound the **shard key**, because that is what a slot
+ * `--start` and `--end` bound the shard key, because that is what a slot
  * is a range of. On a table keyed by `user_id` a range picks users and moves
  * every row each of them has, in every table of the group.
  */

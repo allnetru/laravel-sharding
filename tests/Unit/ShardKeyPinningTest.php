@@ -152,6 +152,30 @@ class ShardKeyPinningTest extends TestCase
     }
 
     /**
+     * An array `where` naming the key pins, the way a plain one does.
+     *
+     * `where(['id' => 1, 'value' => 10])` compiles to one `Nested` clause
+     * wrapping the pair — the shape `firstOrCreate()` and every array `where`
+     * produce — and reading only the top level saw no key in it: the read
+     * fanned out over a predicate that named its shard exactly.
+     *
+     * @return void
+     */
+    public function testAnArrayWhereNamingTheKeyPins(): void
+    {
+        $this->seedNotes();
+
+        [$mine, $theirs] = $this->shardsFor(PinNote::class, 1);
+
+        $this->watch();
+        $found = PinNote::query()->where(['id' => 1])->first();
+
+        $this->assertNotNull($found);
+        $this->assertSame(0, $this->queriesOn($theirs));
+        $this->assertGreaterThan(0, $this->queriesOn($mine));
+    }
+
+    /**
      * A `whereIn` on the key asks the shards it names and no others.
      *
      * @return void

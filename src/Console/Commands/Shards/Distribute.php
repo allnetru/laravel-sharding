@@ -25,7 +25,7 @@ use Illuminate\Support\Facades\Schema;
  * are not where they belong. That is worth running before an upgrade rather
  * than after.
  *
- * **The target is the shard key, not the primary key.** For a colocated table
+ * The target is the shard key, not the primary key. For a colocated table
  * those are different columns and the difference is the whole point: a row of
  * `user_roles` belongs on the shard its `user_id` names, and resolving it by
  * its own identifier would scatter the very rows colocation exists to keep
@@ -35,7 +35,7 @@ use Illuminate\Support\Facades\Schema;
  * group is the group's — that is what colocation means — so one model resolves
  * it for every table in the group.
  *
- * **One model per table, and that is not verbosity.** The tables of a
+ * One model per table, and that is not verbosity. The tables of a
  * colocation group share a key in the sense that matters — the same value
  * decides their shard — but not the column it is written in: `users.id` and
  * `user_roles.user_id` are the same key under two names. Only the model knows
@@ -286,7 +286,7 @@ class Distribute extends Command
     /**
      * Whether every table of every group touched is being swept.
      *
-     * **A group swept in part is worse than one not swept at all**, and this
+     * A group swept in part is worse than one not swept at all, and this
      * used to be a warning printed after the sweeps had already run. The
      * tables of a group share the value that decides their shard, so moving
      * the parent while a child stays behind points that shared key at the new
@@ -456,7 +456,7 @@ class Distribute extends Command
     /**
      * Carry one row from where it is to where its key says it belongs.
      *
-     * **Where it belongs is the whole placement and not only its head.** The
+     * Where it belongs is the whole placement and not only its head. The
      * head is the primary, the tail names the connections this key's replicas
      * belong on, and a run that creates the primary and stops reports success
      * while the metadata goes on advertising replicas that hold nothing. These
@@ -465,7 +465,7 @@ class Distribute extends Command
      * replica connections, so there is nothing left behind to demote either —
      * the row has to be written there.
      *
-     * **Every destination is inspected before any of them is written.** A
+     * Every destination is inspected before any of them is written. A
      * connection can already hold that primary key for three reasons, and only
      * the third is a refusal: a replica of this same row, this same row left
      * by a run interrupted between the write and the delete, or a different

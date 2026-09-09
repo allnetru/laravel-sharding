@@ -10,7 +10,7 @@ interface RowMoveAware
     /**
      * Redirect a shard key once every row it covers has arrived.
      *
-     * The value is the **shard key**, not the row's own identifier, and it is
+     * The value is the shard key, not the row's own identifier, and it is
      * why this is called after the run rather than per row: on a colocated
      * one-to-many table one key covers several rows, so redirecting it when
      * the first of them lands points the routing away from the siblings still

@@ -100,6 +100,8 @@ public function connectionFor(Model|string $model, mixed $key): array
 
 Single-line comments start with a lowercase letter.  Reserve uppercase markers for TODO, FIXME, or KLUDGE annotations.
 
+Docblocks and block comments are plain prose.  No markdown inside them — no `**bold**`, no headings, no lists made of dashes: a comment is read in an editor, where the markers are noise, and emphasis belongs in the sentence.  Backticks around an identifier are the one exception, because they say "this is code" rather than "this is loud".
+
 ```php
 // resolve shard strategy from configuration
 // TODO: support custom backoff policy for rebalance command

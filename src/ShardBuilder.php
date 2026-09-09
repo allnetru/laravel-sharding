@@ -60,7 +60,7 @@ class ShardBuilder extends EloquentBuilder
      * the shape of the schema. Only `onShardConnection()` and the relation
      * resolver ever narrowed anything.
      *
-     * **The soundness argument is one sentence:** with no `or` at the top
+     * The soundness argument is one sentence: with no `or` at the top
      * level the predicate is a conjunction, and a conjunction that contains
      * `key = value` can only match rows whose key is that value — which live
      * on the connections the strategy names for it. Every other clause ANDed
@@ -69,7 +69,7 @@ class ShardBuilder extends EloquentBuilder
      *
      * That is why anything unrecognised is left alone rather than reasoned
      * about. Pinning a query that should have fanned out does not produce a
-     * slow answer, it produces a **silently incomplete** one, and a missing
+     * slow answer, it produces a silently incomplete one, and a missing
      * row is the one failure this package must not have. So the rule is: bind
      * on a clause we are certain about, or do not bind.
      *
@@ -114,8 +114,8 @@ class ShardBuilder extends EloquentBuilder
             /*
             | The primary only, and that is the difference between an
             | optimisation and a gesture. `connectionFor()` answers with the
-            | primary followed by its replicas, and **a replica cannot answer
-            | any read at all**: `replicateForConnection()` puts an
+            | primary followed by its replicas, and a replica cannot answer
+            | any read at all: `replicateForConnection()` puts an
             | unconditional `is_replica = false` on every per-shard copy, so a
             | query sent there is guaranteed to come back empty. Scheduling one
             | costs a round trip for a certainty — and with the package's
@@ -179,34 +179,10 @@ class ShardBuilder extends EloquentBuilder
             return null;
         }
 
-        $wheres = $query->wheres;
+        $wheres = $this->conjunctiveWheres($query->wheres);
 
-        if ($wheres === []) {
+        if ($wheres === null || $wheres === []) {
             return null;
-        }
-
-        /*
-        | Two words disqualify the whole predicate, and both for the same
-        | reason: it stops being a conjunction of things that must all hold.
-        |
-        | `or` is the obvious one — `where('tenant_id', 5)->orWhere('tenant_id',
-        | 6)` matches rows on two shards, and an `or` whose other side names no
-        | key at all matches rows anywhere.
-        |
-        | `not` is the one that looks safe and is not. Laravel writes
-        | `whereNot('id', 1)` as an ordinary `Basic` equality with the boolean
-        | «and not», so the loop below would read it as `id = 1` and pin the
-        | query to that key's shard — while the predicate it actually runs
-        | matches every **other** identifier, all of which live elsewhere. That
-        | is the exact failure this guard exists to prevent, arriving through
-        | the clause that reads most like the one it is safe to trust.
-        */
-        foreach ($wheres as $where) {
-            $boolean = strtolower((string) ($where['boolean'] ?? 'and'));
-
-            if (str_contains($boolean, 'or') || str_contains($boolean, 'not')) {
-                return null;
-            }
         }
 
         foreach ($wheres as $where) {
@@ -250,6 +226,70 @@ class ShardBuilder extends EloquentBuilder
         }
 
         return null;
+    }
+
+    /**
+     * The leaf clauses of a predicate that is a conjunction all the way down.
+     *
+     * Two words disqualify the whole predicate, and both for the same reason:
+     * it stops being a conjunction of things that must all hold.
+     *
+     * `or` is the obvious one — `where('tenant_id', 5)->orWhere('tenant_id',
+     * 6)` matches rows on two shards, and an `or` whose other side names no
+     * key at all matches rows anywhere.
+     *
+     * `not` is the one that looks safe and is not. Laravel writes
+     * `whereNot('id', 1)` as an ordinary `Basic` equality with the boolean
+     * «and not», so a reader would take it as `id = 1` and pin the query to
+     * that key's shard — while the predicate it actually runs matches every
+     * other identifier, all of which live elsewhere. That is the exact
+     * failure this guard exists to prevent, arriving through the clause that
+     * reads most like the one it is safe to trust.
+     *
+     * A nested group joined by `and` is opened up. `where(['tenant_id' => 5,
+     * 'name' => 'x'])` — the shape `firstOrCreate()` and every array `where`
+     * produce — compiles to one `Nested` clause wrapping the pair, and reading
+     * only the top level saw no key in it at all: the read fanned out over a
+     * predicate that named its shard exactly. A conjunction inside a
+     * conjunction is still a conjunction, so its leaves count the same as the
+     * outer ones.
+     *
+     * A group that is not a plain conjunction inside — `(a or b)` — is not
+     * opened, and does not disqualify anything either. `k = 5 and (a or b)`
+     * still matches only rows whose key is 5: the group is one more clause
+     * ANDed beside the key, and like every such clause it can narrow the
+     * result but never add a row from another shard. What it cannot do is
+     * offer a leaf of its own, so a key named only inside it is not seen and
+     * the read fans out, which is the safe direction.
+     *
+     * @param array<int, array<string, mixed>> $wheres
+     * @return list<array<string, mixed>>|null Null when the predicate is not a plain conjunction.
+     */
+    protected function conjunctiveWheres(array $wheres): ?array
+    {
+        $leaves = [];
+
+        foreach ($wheres as $where) {
+            $boolean = strtolower((string) ($where['boolean'] ?? 'and'));
+
+            if (str_contains($boolean, 'or') || str_contains($boolean, 'not')) {
+                return null;
+            }
+
+            if (($where['type'] ?? '') === 'Nested' && isset($where['query'])) {
+                $inner = $this->conjunctiveWheres($where['query']->wheres ?? []);
+
+                if ($inner !== null) {
+                    array_push($leaves, ...$inner);
+                }
+
+                continue;
+            }
+
+            $leaves[] = $where;
+        }
+
+        return $leaves;
     }
 
     /**
@@ -1365,7 +1405,7 @@ class ShardBuilder extends EloquentBuilder
      */
     public function firstOrCreate(array $attributes = [], Closure|array $values = [])
     {
-        if ($instance = $this->firstAcrossConnections($attributes)) {
+        if ($instance = $this->firstMatching($attributes)) {
             return $instance;
         }
 
@@ -1385,7 +1425,7 @@ class ShardBuilder extends EloquentBuilder
             $values = $values();
         }
 
-        if ($instance = $this->firstAcrossConnections($attributes)) {
+        if ($instance = $this->firstMatching($attributes)) {
             $instance->fill($values);
             $instance->save();
 
@@ -1396,16 +1436,26 @@ class ShardBuilder extends EloquentBuilder
     }
 
     /**
-     * Find the first model across all shard connections.
+     * The first row matching the attributes, on the shards they point at.
+     *
+     * The attributes go onto this builder before the connections are chosen,
+     * which is what lets `connections()` see the shard key among them and pin
+     * the read. Added per shard copy instead — which is what this did — they
+     * were invisible to the routing, and a `firstOrCreate(['tenant_id' => 5,
+     * …])` read every shard to find a row whose key named one of them. The
+     * same thing Eloquent's own `firstOrCreate()` does to its builder, for
+     * the same reason.
      *
      * @param array<string, mixed> $attributes
      * @return \Illuminate\Database\Eloquent\Model|null
      */
-    protected function firstAcrossConnections(array $attributes)
+    protected function firstMatching(array $attributes)
     {
+        $this->where($attributes);
+
         foreach ($this->connections() as $name => $config) {
-            $builder = $this->replicateForConnection($name);
-            $instance = $builder->where($attributes)->first();
+            $instance = $this->replicateForConnection($name)->first();
+
             if ($instance) {
                 return $instance;
             }

@@ -16,7 +16,7 @@ interface SupportsAfterRebalance
      * refused or failed on any row skips this and raises `RebalanceIncomplete`
      * instead.
      *
-     * The first argument is the **scope the routing lives under** — the group
+     * The first argument is the scope the routing lives under — the group
      * owner's table, which is `$config['table']` — rather than any one of the
      * tables whose rows moved. A rebalance covers a whole colocation group, and
      * the group has one routing.
