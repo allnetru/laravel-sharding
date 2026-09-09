@@ -77,7 +77,16 @@ class ShardMorphToTest extends TestCase
      */
     public function testAStoredRowWithoutAMorphAnswersNull(): void
     {
-        DB::connection('shard_1')->table('mt_notes')->insert([
+        /*
+        | Inserted on the connection the key names, and asked of the manager
+        | rather than written down. A row placed by hand on any other shard is
+        | a row whose key points elsewhere — findable only by a fan-out, which
+        | is exactly the state v0.4.0 stopped covering for. The subject of this
+        | test is a morph without a type, not misplacement.
+        */
+        $connection = app(ShardingManager::class)->connectionFor(new MtNote(), 1)[0];
+
+        DB::connection($connection)->table('mt_notes')->insert([
             'id' => 1,
             'subject_type' => null,
             'subject_id' => null,

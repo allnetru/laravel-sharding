@@ -109,10 +109,33 @@ class ShardBuilder extends EloquentBuilder
         $names = [];
 
         foreach ($values as $value) {
-            foreach ($manager->connectionFor($model, $value) as $name) {
-                $names[(string) $name] = true;
+            $resolved = $manager->connectionFor($model, $value);
+
+            /*
+            | The primary only, and that is the difference between an
+            | optimisation and a gesture. `connectionFor()` answers with the
+            | primary followed by its replicas, and a replica cannot contribute
+            | a row to an ordinary read: every one of them carries
+            | `is_replica = true` and the scope on the model filters those out.
+            | Scheduling a query there would buy nothing and cost a round trip
+            | — and with the package's default of one replica, a keyed read
+            | would still touch two connections, which in a two-shard
+            | deployment is every shard there is.
+            |
+            | Unless the scope has been removed on purpose, which is the one
+            | way a caller asks to see replica rows. Then their connections are
+            | exactly what the query is about.
+            */
+            $names[(string) ($resolved[0] ?? '')] = true;
+
+            if ($this->readsReplicas()) {
+                foreach (array_slice($resolved, 1) as $name) {
+                    $names[(string) $name] = true;
+                }
             }
         }
+
+        unset($names['']);
 
         $pinned = array_intersect_key($all, $names);
 
@@ -136,21 +159,55 @@ class ShardBuilder extends EloquentBuilder
      */
     protected function shardKeyValues(string $shardKey, string $table): ?array
     {
-        $wheres = $this->getQuery()->wheres;
+        /*
+        | The predicate with the model's global scopes applied, and not the raw
+        | one. `ShardBuilder::get()` does not apply them at the top — it copies
+        | them onto each per-shard copy, which applies them itself — so the raw
+        | `wheres` are not what will run. A scope that adds a top-level
+        | alternative would then be invisible here and the query would be
+        | pinned on a predicate narrower than the one executed, losing the rows
+        | the scope was there to admit. `applyScopes()` answers on a clone, so
+        | nothing here changes the builder.
+        */
+        $query = $this->applyScopes()->getQuery();
+
+        /*
+        | A union is a second predicate the loop below never sees:
+        | `where('id', 1)->union(where('id', 2))` would pin to the first key's
+        | shard and run the union arm there, and the second row would simply
+        | not be found. Routing a union properly means agreeing on the shards
+        | of every arm, which is a different feature; until then it fans out.
+        */
+        if (($query->unions ?? []) !== []) {
+            return null;
+        }
+
+        $wheres = $query->wheres;
 
         if ($wheres === []) {
             return null;
         }
 
         /*
-        | Any `or` at the top level and the predicate stops being a
-        | conjunction: `where('tenant_id', 5)->orWhere('tenant_id', 6)` matches
-        | rows on two shards, and so does an `or` whose other side names no key
-        | at all. Laravel spells the negated forms «and not» and «or not», so
-        | the test is for the word rather than for equality.
+        | Two words disqualify the whole predicate, and both for the same
+        | reason: it stops being a conjunction of things that must all hold.
+        |
+        | `or` is the obvious one — `where('tenant_id', 5)->orWhere('tenant_id',
+        | 6)` matches rows on two shards, and an `or` whose other side names no
+        | key at all matches rows anywhere.
+        |
+        | `not` is the one that looks safe and is not. Laravel writes
+        | `whereNot('id', 1)` as an ordinary `Basic` equality with the boolean
+        | «and not», so the loop below would read it as `id = 1` and pin the
+        | query to that key's shard — while the predicate it actually runs
+        | matches every **other** identifier, all of which live elsewhere. That
+        | is the exact failure this guard exists to prevent, arriving through
+        | the clause that reads most like the one it is safe to trust.
         */
         foreach ($wheres as $where) {
-            if (str_contains(strtolower((string) ($where['boolean'] ?? 'and')), 'or')) {
+            $boolean = strtolower((string) ($where['boolean'] ?? 'and'));
+
+            if (str_contains($boolean, 'or') || str_contains($boolean, 'not')) {
                 return null;
             }
         }
@@ -196,6 +253,23 @@ class ShardBuilder extends EloquentBuilder
         }
 
         return null;
+    }
+
+    /**
+     * Whether this read is asking for replica rows.
+     *
+     * The `without_replicas` scope is on every sharded model and filters them
+     * out, so a read that still has it can only be answered by a primary.
+     * Dropping the scope is the one way to ask for the copies, and then their
+     * connections are the point of the query rather than a waste of a round
+     * trip.
+     *
+     * @return bool
+     */
+    protected function readsReplicas(): bool
+    {
+        return in_array('without_replicas', $this->removedScopes, true)
+            || !array_key_exists('without_replicas', $this->scopes);
     }
 
     /**

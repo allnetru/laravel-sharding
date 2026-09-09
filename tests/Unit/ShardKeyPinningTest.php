@@ -296,6 +296,115 @@ class ShardKeyPinningTest extends TestCase
     }
 
     /**
+     * A negated equality on the key is not an equality on the key.
+     *
+     * The clause that reads most like the one it is safe to trust, and the
+     * most dangerous: Laravel writes `whereNot('id', 1)` as an ordinary
+     * `Basic` equality whose boolean is «and not». Read as `id = 1` it pins
+     * the query to that key's shard, while the predicate it runs matches every
+     * **other** identifier — all of which live elsewhere. Found in review of
+     * the change that introduced pinning.
+     *
+     * @return void
+     */
+    public function testANegatedKeyStillAsksEveryShard(): void
+    {
+        $this->seedNotes();
+
+        $this->watch();
+        $found = PinNote::query()->whereNot('id', 1)->get();
+
+        $this->assertCount(3, $found, 'rows on other shards were lost');
+        $this->assertGreaterThan(0, $this->queriesOn('shard_1'));
+        $this->assertGreaterThan(0, $this->queriesOn('shard_2'));
+    }
+
+    /**
+     * A union is a second predicate, and it is not read here.
+     *
+     * `where('id', 1)->union(where('id', 2))` pinned to the first key's shard
+     * would run the union arm on that same connection and simply not find the
+     * second row.
+     *
+     * @return void
+     */
+    public function testAUnionStillAsksEveryShard(): void
+    {
+        $this->seedNotes();
+
+        $this->watch();
+        PinNote::query()
+            ->where('id', 1)
+            ->union(PinNote::query()->where('id', 2))
+            ->get();
+
+        $this->assertGreaterThan(0, $this->queriesOn('shard_1'));
+        $this->assertGreaterThan(0, $this->queriesOn('shard_2'));
+    }
+
+    /**
+     * A global scope that widens the predicate is part of the predicate.
+     *
+     * The scopes are applied to each per-shard copy rather than to the builder
+     * the routing decision is made on, so a scope adding a top-level
+     * alternative was invisible to it: the query would be pinned on a
+     * predicate narrower than the one executed, and the rows the scope existed
+     * to admit would be lost.
+     *
+     * @return void
+     */
+    public function testAGlobalScopeThatWidensThePredicateStopsPinning(): void
+    {
+        foreach ([1, 2, 3, 4] as $id) {
+            WidenedNote::create(['id' => $id, 'value' => $id * 10]);
+        }
+
+        $this->watch();
+        WidenedNote::query()->where('id', 1)->get();
+
+        $this->assertGreaterThan(0, $this->queriesOn('shard_1'));
+        $this->assertGreaterThan(0, $this->queriesOn('shard_2'));
+    }
+
+    /**
+     * A keyed read touches the primary, not its replicas.
+     *
+     * `connectionFor()` answers with the primary followed by its replicas, and
+     * a replica cannot contribute a row to an ordinary read: they all carry
+     * `is_replica = true` and the model's scope filters those out. Reading
+     * them anyway would cost a round trip for nothing — and with the package's
+     * default of one replica, a keyed read would touch two connections, which
+     * in a two-shard deployment is every shard there is.
+     *
+     * @return void
+     */
+    public function testAKeyedReadDoesNotVisitTheReplicas(): void
+    {
+        config(['sharding.tables.copies' => ['strategy' => 'hash', 'replica_count' => 1]]);
+        app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
+
+        foreach (['shard_1', 'shard_2'] as $connection) {
+            Schema::connection($connection)->create('copies', function (Blueprint $table): void {
+                $table->unsignedBigInteger('id')->primary();
+                $table->boolean('is_replica')->default(false);
+            });
+        }
+
+        CopiedNote::create(['id' => 1]);
+
+        $resolved = app(ShardingManager::class)->connectionFor(new CopiedNote(), 1);
+
+        $this->assertCount(2, $resolved, 'the fixture has no replica to avoid');
+
+        $this->watch();
+        $found = CopiedNote::query()->where('id', 1)->get();
+
+        $this->assertCount(1, $found);
+        $this->assertGreaterThan(0, $this->queriesOn($resolved[0]));
+        $this->assertSame(0, $this->queriesOn($resolved[1]), 'the replica was read for nothing');
+    }
+
+    /**
      * Two rows on each shard, addressed by identifier.
      *
      * @return void
@@ -398,6 +507,49 @@ class PinLine extends Model
     protected $table = 'lines';
 
     protected string $shardKey = 'tenant_id';
+
+    public $timestamps = false;
+
+    protected $guarded = [];
+
+    protected $casts = ['is_replica' => 'bool'];
+}
+
+class WidenedNote extends Model
+{
+    use Shardable;
+
+    protected $table = 'notes';
+
+    public $timestamps = false;
+
+    protected $guarded = [];
+
+    protected $casts = ['is_replica' => 'bool'];
+
+    /**
+     * A scope that admits a row the query did not ask for.
+     *
+     * Contrived on purpose — it is the smallest thing that widens a predicate
+     * at the top level, which is the shape the routing has to notice.
+     *
+     * @return void
+     */
+    protected static function booted(): void
+    {
+        static::addGlobalScope('widened', function ($builder): void {
+            $builder->orWhere('value', 20);
+        });
+    }
+}
+
+class CopiedNote extends Model
+{
+    use Shardable;
+
+    protected $table = 'copies';
+
+    public $incrementing = false;
 
     public $timestamps = false;
 
