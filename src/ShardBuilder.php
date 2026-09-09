@@ -31,11 +31,214 @@ class ShardBuilder extends EloquentBuilder
     protected bool $singleConnection = false;
 
     /**
+     * How many values of an `IN` are still worth resolving one by one.
+     *
+     * Above this the resolution costs more than the fan-out it saves, and a
+     * list that long is usually about to cover every shard anyway.
+     */
+    protected const MAX_PINNED_KEYS = 100;
+
+    /**
+     * The connections this query has to be run on.
+     *
      * @return array<string, array{weight:int}>
      */
     protected function connections(): array
     {
-        return app(ShardingManager::class)->connectionsFor($this->getModel());
+        $all = app(ShardingManager::class)->connectionsFor($this->getModel());
+
+        return $this->connectionsFromShardKey($all) ?? $all;
+    }
+
+    /**
+     * The connections a query's own shard key restricts it to.
+     *
+     * Until this existed nothing looked at a query at all: a read that named
+     * its shard key exactly — `where('tenant_id', 5)` — still opened a cursor
+     * on every shard and merged the results. Correct, and N times the work,
+     * which made «a query has to know its key» a rule that bought nothing but
+     * the shape of the schema. Only `onShardConnection()` and the relation
+     * resolver ever narrowed anything.
+     *
+     * **The soundness argument is one sentence:** with no `or` at the top
+     * level the predicate is a conjunction, and a conjunction that contains
+     * `key = value` can only match rows whose key is that value — which live
+     * on the connections the strategy names for it. Every other clause ANDed
+     * beside it can narrow the result further but can never add a row from
+     * another shard, so it does not have to be understood at all.
+     *
+     * That is why anything unrecognised is left alone rather than reasoned
+     * about. Pinning a query that should have fanned out does not produce a
+     * slow answer, it produces a **silently incomplete** one, and a missing
+     * row is the one failure this package must not have. So the rule is: bind
+     * on a clause we are certain about, or do not bind.
+     *
+     * @param array<string, array{weight:int}> $all Every connection of the model.
+     *
+     * @return array<string, array{weight:int}>|null Null when the query names no key.
+     */
+    protected function connectionsFromShardKey(array $all): ?array
+    {
+        if ($this->singleConnection || $all === []) {
+            return null;
+        }
+
+        /*
+        | The switch exists for one window and it is a real one: while
+        | `shards:rebalance` is moving rows, a row can sit on one connection
+        | while its slot already names another. A fan-out finds it either way;
+        | a pinned read asks the connection the slot names and misses it.
+        */
+        if (!(bool) config('sharding.pin_by_key', true)) {
+            return null;
+        }
+
+        $model = $this->getModel();
+
+        if (!method_exists($model, 'getShardKey')) {
+            return null;
+        }
+
+        $values = $this->shardKeyValues($model->getShardKey(), $model->getTable());
+
+        if ($values === null || $values === []) {
+            return null;
+        }
+
+        $manager = app(ShardingManager::class);
+        $names = [];
+
+        foreach ($values as $value) {
+            foreach ($manager->connectionFor($model, $value) as $name) {
+                $names[(string) $name] = true;
+            }
+        }
+
+        $pinned = array_intersect_key($all, $names);
+
+        /*
+        | An empty intersection means the strategy named a connection this
+        | model is not configured for — a stale slot, a connection removed
+        | from the list. Falling back to the fan-out answers the question
+        | correctly and slowly; trusting the intersection would answer it
+        | quickly and wrongly, with no rows and no error.
+        */
+        return $pinned === [] ? null : $pinned;
+    }
+
+    /**
+     * The shard key values a conjunction of `where`s binds the query to.
+     *
+     * @param string $shardKey The model's shard key column.
+     * @param string $table The model's table, for a qualified column.
+     *
+     * @return list<mixed>|null Null when nothing binds it.
+     */
+    protected function shardKeyValues(string $shardKey, string $table): ?array
+    {
+        $wheres = $this->getQuery()->wheres ?? [];
+
+        if ($wheres === []) {
+            return null;
+        }
+
+        /*
+        | Any `or` at the top level and the predicate stops being a
+        | conjunction: `where('tenant_id', 5)->orWhere('tenant_id', 6)` matches
+        | rows on two shards, and so does an `or` whose other side names no key
+        | at all. Laravel spells the negated forms «and not» and «or not», so
+        | the test is for the word rather than for equality.
+        */
+        foreach ($wheres as $where) {
+            if (str_contains(strtolower((string) ($where['boolean'] ?? 'and')), 'or')) {
+                return null;
+            }
+        }
+
+        foreach ($wheres as $where) {
+            $type = $where['type'] ?? '';
+            $column = $where['column'] ?? null;
+
+            if (!is_string($column) || !$this->isShardKeyColumn($column, $shardKey, $table)) {
+                continue;
+            }
+
+            // an equality binds the query to exactly one shard, which is the
+            // case worth having: it is what almost every read of the product
+            // looks like
+            if ($type === 'Basic' && ($where['operator'] ?? '') === '=') {
+                $value = $where['value'] ?? null;
+
+                if ($this->isPinnableValue($value)) {
+                    return [$value];
+                }
+
+                continue;
+            }
+
+            if ($type === 'In') {
+                $candidates = $where['values'] ?? [];
+
+                if (!is_array($candidates)
+                    || $candidates === []
+                    || count($candidates) > static::MAX_PINNED_KEYS) {
+                    continue;
+                }
+
+                foreach ($candidates as $candidate) {
+                    if (!$this->isPinnableValue($candidate)) {
+                        continue 2;
+                    }
+                }
+
+                return array_values($candidates);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Whether a `where` names the model's own shard key.
+     *
+     * A qualified column is only accepted for the model's own table: a join
+     * can bring another table that has a column of the same name, and reading
+     * its value as our shard key would pin the query to the wrong shard.
+     *
+     * @param string $column The column as the where holds it.
+     * @param string $shardKey The shard key.
+     * @param string $table The model's table.
+     *
+     * @return bool
+     */
+    protected function isShardKeyColumn(string $column, string $shardKey, string $table): bool
+    {
+        $parts = explode('.', $column);
+        $name = array_pop($parts);
+
+        if ($name !== $shardKey) {
+            return false;
+        }
+
+        $qualifier = array_pop($parts);
+
+        return $qualifier === null || $qualifier === $table;
+    }
+
+    /**
+     * Whether a value can be handed to the strategy as a key.
+     *
+     * Expressions, closures and builders are all legal in a `where` and none
+     * of them is a key we can resolve: they are answers the database has not
+     * given yet.
+     *
+     * @param mixed $value The value from the where.
+     *
+     * @return bool
+     */
+    protected function isPinnableValue(mixed $value): bool
+    {
+        return is_int($value) || is_string($value);
     }
 
     /**
