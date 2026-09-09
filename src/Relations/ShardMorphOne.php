@@ -30,4 +30,12 @@ class ShardMorphOne extends MorphOne
             parent::addConstraints();
         }
     }
+
+    /** @inheritDoc */
+    public function addEagerConstraints(array $models)
+    {
+        $this->pinEagerLoadToParentsShard($models);
+
+        parent::addEagerConstraints($models);
+    }
 }

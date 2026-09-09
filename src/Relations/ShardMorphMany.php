@@ -30,4 +30,12 @@ class ShardMorphMany extends MorphMany
             parent::addConstraints();
         }
     }
+
+    /** @inheritDoc */
+    public function addEagerConstraints(array $models)
+    {
+        $this->pinEagerLoadToParentsShard($models);
+
+        parent::addEagerConstraints($models);
+    }
 }

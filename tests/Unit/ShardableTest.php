@@ -56,21 +56,41 @@ class ShardableTest extends TestCase
         }
     }
 
-    public function testGetConnectionNameAssignsIdAndConnections(): void
+    /**
+     * A keyless model is given a grammar connection, not a route and a key.
+     *
+     * Eloquent asks for the connection whenever it builds a query builder, and
+     * this used to answer by generating a key and resolving the shard for it:
+     * a metadata round trip per `Model::query()`, spent on a connection the
+     * builder then decides for itself, and a random key written onto every
+     * fresh instance. The first configured connection answers now, nothing is
+     * generated, and the model is left as it was.
+     */
+    public function testAKeylessModelGetsAGrammarConnectionAndNoKey(): void
     {
         $item = new ShardableItem(['value' => 1]);
 
-        $this->assertNull($item->id);
-
         $connection = $item->getConnectionName();
 
-        $this->assertNotNull($item->id);
+        $this->assertSame('shard_1', $connection);
+        $this->assertNull($item->id, 'a key was generated just to name a connection');
+        $this->assertSame(0, $this->generator->calls, 'the generator was consulted for a query builder');
+        $this->assertSame([], $item->replicaConnections);
+    }
 
-        $expected = app(ShardingManager::class)->connectionFor($item, $item->id);
-        $this->assertSame($expected[0], $connection);
+    /**
+     * A model that knows its key is routed by it, once, and remembers.
+     */
+    public function testAKeyedModelIsRoutedByItsKey(): void
+    {
+        $item = new ShardableItem(['id' => 42, 'value' => 1]);
+
+        $expected = app(ShardingManager::class)->connectionFor($item, 42);
+
+        $this->assertSame($expected[0], $item->getConnectionName());
         $this->assertSame($expected[0], $item->getConnectionName());
         $this->assertSame(array_slice($expected, 1), $item->replicaConnections);
-        $this->assertSame(1, $this->generator->calls);
+        $this->assertSame(0, $this->generator->calls);
     }
 
     public function testSavingDistributesDataAcrossShards(): void

@@ -287,8 +287,8 @@ for more advanced scenarios.
 
 Use the bundled Artisan commands to inspect and maintain shards:
 
-- `php artisan shards:distribute {model}` – backfill existing tables into shards in chunks once strategies are configured.
-- `php artisan shards:rebalance {table}` – migrate rows between shards with optional `--from`, `--to`, `--start`, and `--end` filters.
+- `php artisan shards:distribute {model} [{model} ...] [--dry-run]` – put existing rows on the shard their own key names, in chunks. One model per table: the tables of a colocation group share a key but not the column it lives in (`users.id` and `user_roles.user_id` are the same key under two names), and only the model knows its own. `--dry-run` counts what is misplaced without moving anything, which is what to run before an upgrade.
+- `php artisan shards:rebalance {model} [{model} ...]` – move the rows of a colocation group between shards with optional `--from`, `--to`, `--start`, and `--end` filters. Model classes rather than table names, one per table of the group, for the same two reasons `shards:distribute` takes them: a table name cannot find the model outside `App\Models`, and only the model knows the column its own shard key lives in. Every populated table of the group has to be named — the routing being handed over belongs to the group, so moving one table would strand the others behind it — and an empty sibling may be left out. `--start` and `--end` bound the **shard key**, since that is what a slot is a range of; a range strategy needs both of them with `--to`.
 - `php artisan shards:migrate` – run shard-specific migrations across every configured connection.
 
 ## Testing

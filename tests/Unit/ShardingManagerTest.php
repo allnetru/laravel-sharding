@@ -42,6 +42,33 @@ class ShardingManagerTest extends TestCase
         ];
     }
 
+    /**
+     * The connection a key lives on, as something SQL can be run against.
+     *
+     * Applications kept writing `DB::connection(connectionFor(...)[0])` in
+     * their own helpers, because a keyless model's connection is a grammar
+     * connection and not the tenant's shard.
+     */
+    public function testConnectionAnswersWithTheKeysPrimaryReadyToQuery(): void
+    {
+        config([
+            'database.connections.shard_a' => ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => ''],
+            'database.connections.shard_b' => ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => ''],
+        ]);
+
+        $manager = new ShardingManager([
+            'default' => 'hash',
+            'strategies' => ['hash' => \Allnetru\Sharding\Strategies\HashStrategy::class],
+            'connections' => ['shard_a' => ['weight' => 1], 'shard_b' => ['weight' => 1]],
+            'tables' => ['things' => ['strategy' => 'hash', 'replica_count' => 1]],
+        ]);
+
+        $connection = $manager->connection('things', 42);
+
+        $this->assertSame($manager->connectionFor('things', 42)[0], $connection->getName());
+        $this->assertSame(1, $connection->selectOne('select 1 as one')->one);
+    }
+
     public function testConnectionsForUsesTableSpecificDefinition(): void
     {
         $manager = new ShardingManager($this->baseConfig);
@@ -139,8 +166,14 @@ class FakeStrategy implements Strategy
         return false;
     }
 
-    public function rebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): int
-    {
+    public function rebalance(
+        array $tables,
+        ?string $from,
+        ?string $to,
+        ?int $start,
+        ?int $end,
+        array $config
+    ): int {
         $this->lastConfig = $config;
 
         return 0;

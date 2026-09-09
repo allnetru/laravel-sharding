@@ -4,7 +4,9 @@ namespace Allnetru\Sharding;
 
 use Allnetru\Sharding\Models\Concerns\Shardable;
 use Allnetru\Sharding\Strategies\Strategy;
+use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
 class ShardingManager
@@ -131,6 +133,37 @@ class ShardingManager
         }
 
         return false;
+    }
+
+    /**
+     * The connection a key's rows live on, ready to run SQL against.
+     *
+     * For the raw statement a model cannot express — a spatial update, a
+     * bulk upsert, a report — and the reason it exists is what applications
+     * wrote instead. `(new Parcel())->getConnection()` is not it: a keyless
+     * model is given the first shard as a grammar connection, which is a
+     * random shard as far as a tenant's rows are concerned. So every service
+     * that needed the connection grew its own four-line helper around
+     * `connectionFor()[0]`, and one application had eight copies of it. This
+     * is that helper, once.
+     *
+     * The primary only: a replica cannot be written to by hand without the
+     * copies drifting apart, and a read from one is a read the model layer
+     * refuses to make.
+     *
+     * @param Model|string $model The sharded model or table name.
+     * @param mixed $key The shard key value.
+     * @return ConnectionInterface
+     */
+    public function connection(Model|string $model, mixed $key): ConnectionInterface
+    {
+        $connections = $this->connectionFor($model, $key);
+
+        if ($connections === []) {
+            throw new RuntimeException('No shard connection is configured for ' . (is_string($model) ? $model : $model::class) . '.');
+        }
+
+        return DB::connection($connections[0]);
     }
 
     /**

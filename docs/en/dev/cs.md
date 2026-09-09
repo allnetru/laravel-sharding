@@ -100,6 +100,8 @@ public function connectionFor(Model|string $model, mixed $key): array
 
 Single-line comments start with a lowercase letter.  Reserve uppercase markers for TODO, FIXME, or KLUDGE annotations.
 
+Docblocks and block comments are plain prose.  No markdown inside them — no `**bold**`, no headings, no lists made of dashes: a comment is read in an editor, where the markers are noise, and emphasis belongs in the sentence.  Backticks around an identifier are the one exception, because they say "this is code" rather than "this is loud".
+
 ```php
 // resolve shard strategy from configuration
 // TODO: support custom backoff policy for rebalance command
@@ -110,17 +112,17 @@ Single-line comments start with a lowercase letter.  Reserve uppercase markers f
 Input coming from artisan options, console arguments, or configuration arrays should use `snake_case` for keys and `kebab-case` for command options.  Keep option names short and explicit so they map directly to sharding terminology.
 
 ```php
-protected $signature = 'shards:rebalance {table} {--from=} {--to=} {--start=} {--end=}';
+protected $signature = 'shards:rebalance {model} {--from=} {--to=} {--start=} {--end=}';
 ```
 
 When documenting request payloads for host applications, follow the same `snake_case` style because it matches Laravel's validation rules and casts.
 
 ## Console Commands
 
-The package exposes artisan commands under the `shards` namespace.  Use a noun for the namespace and a verb for the action (`shards:rebalance`, `shards:distribute`).  Arguments describe the subject (e.g. `{table}`) and options describe filters or ranges (`--from`, `--to`).
+The package exposes artisan commands under the `shards` namespace.  Use a noun for the namespace and a verb for the action (`shards:rebalance`, `shards:distribute`).  Arguments describe the subject — the model class, because only the model knows the column its own shard key lives in — and options describe filters or ranges (`--from`, `--to`).
 
 ```php
-php artisan shards:rebalance users --from=shard-1 --to=shard-3 --start=1 --end=5000
+php artisan shards:rebalance "App\Models\User" --from=shard-1 --to=shard-3 --start=1 --end=5000
 ```
 
 ## Enums

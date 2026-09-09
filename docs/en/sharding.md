@@ -81,6 +81,145 @@ Available strategies include:
 
 Only strategies that support rebalancing can be used with the `shards:rebalance` command.
 
+#### Writing your own
+
+`Allnetru\Sharding\Strategies\Strategy` is the contract, and `Rebalanceable`
+is the trait that implements the move for you.
+
+**The `rebalance()` signature changed in 0.5.0 and a custom strategy has to
+follow it.** It takes every table of a colocation group at once, each with its
+own shard key and row key:
+
+```php
+use Allnetru\Sharding\Support\ShardedTable;
+
+public function rebalance(
+    array $tables,      // list<ShardedTable>: one per table of the group
+    ?string $from,
+    ?string $to,
+    ?int $start,
+    ?int $end,
+    array $config,      // the group owner's, as ShardingManager::strategyFor() gives it
+): int;   // how many rows were moved
+
+new ShardedTable(
+    table: 'user_roles',
+    shardKey: 'user_id',   // decides which connection a row belongs on
+    rowKey: 'id',          // identifies one row
+);
+```
+
+Two keys per table, because one could not serve both. On a colocated
+one-to-many table — several `user_roles` rows sharing one `user_id` — using
+the shard key for identity means `where('user_id', ...)->delete()` after moving
+a single row, which removes every other role that user has. Getting the routing
+wrong loses a row's location; getting the identity wrong loses the row.
+
+A list of tables, because the routing a rebalance hands over belongs to the
+group and not to a table: moving one table's rows and redirecting the key sends
+every sibling's reads to the new connection while their rows are still on the
+old one. `Rebalanceable` runs every pass across all the tables and changes the
+routing once, after all of them have arrived. `afterRebalance()` receives the
+group owner's table as its scope for the same reason.
+
+**An explicit `--to` is a routing change, and only a strategy that can express
+one may take it.** A row-aware strategy redirects each key. A range strategy
+hands a range over, so it needs both `--start` and `--end` — a range with
+neither bound is a catch-all that would send every key of the table to the
+target, including every key that never moved. A strategy that can do neither is
+refused an explicit target outright.
+
+**Replica copies are not moved.** A replica belongs on a replica connection
+rather than on the primary its key names, so the rule the walk applies is not
+its rule — `shards:distribute` skips them for the same reason. The consequence
+worth knowing before retiring a connection: replicas sitting on it stay there,
+so those keys carry fewer copies than are configured until something rebuilds
+them.
+
+The first pass also refuses a run that would move only part of a key. Two
+connections holding the same **key** is not the same thing as two holding the
+same **row** — on a colocated table they do it with entirely different row keys
+— and with `--from` naming one of them its rows would move while the rest stayed,
+leaving the key spread across connections its routing can name only one of.
+Noticed afterwards that is unrecoverable, so it is refused first. A key whose
+rows sit on the destination already is not that case: it is what an interrupted
+run leaves, and finishing it is the recovery.
+
+It also refuses a run in which two source connections hold the same
+primary key as primaries. A primary key is unique within a connection, so a key
+two of them share is either different rows under one identifier or a duplicate
+of one row, and both need a person rather than a repair tool.
+
+`rowMoved()` is called once per distinct shard key, after the whole run, and
+not per row: on a colocated one-to-many table one key covers several rows, so
+redirecting it when the first one lands points the routing away from the
+siblings still on the source.
+
+**Once both metadata steps are done, the placement they name is written.** A
+pass over the range, not a step tied to what this run moved: the strategy
+decides what the replicas of a moved key become, and where it picks a connection
+the move never wrote to — an explicit `--to` outside the key's old placement —
+the metadata used to advertise a replica holding nothing. Every connection the
+routing names now holds a copy marked as a replica; a missing one is written, a
+different row under that identifier is left alone and fails the run.
+
+Being a pass rather than a step is what makes it work for a range strategy,
+which chooses its replicas inside `afterRebalance()` and is not row-aware at
+all, and what makes a rerun repair a placement half-written by a database error
+even though the primary mapping is already correct.
+
+**A colocation group moves as one.** The routing belongs to the group, so
+moving one table's rows and redirecting the key would send every sibling's
+reads to the new connection while their rows stay on the old one. The command
+takes a model per table, refuses a populated table left unnamed, and the trait
+runs every pass across all the tables before the routing changes once. The
+partial-key check spans the group too: an owner on the connection being walked
+and one of its rows in another table on a connection that is not is a split,
+and it is refused before anything moves.
+
+**The keys whose routing is handed over are read off the data, not remembered.**
+Every configured connection is walked afterwards, and a key whose rows sit
+somewhere the routing does not name is redirected — whoever moved them and
+whenever. So re-running an interrupted rebalance finishes it, including when the
+interruption was in the handoff itself. A key whose rows are spread over more
+than one connection is not decided: it is a failure, because choosing either
+connection would strand the rows on the other. Everything before it is
+idempotent: a row already on the shard its key names is skipped, a destination
+already holding this row is accepted. By the handoff the source copies are gone,
+so a `rowMoved()` that throws — a Redis or metadata-database outage in that
+window — leaves the rows on the new connection and the routing pointing at the
+old one, with nothing left for a second run to notice. There is no ordering that
+avoids it: handing the routing over first makes reads miss rows that have not
+moved, releasing the sources afterwards leaves the row a primary on two
+connections at once and a fan-out returns it twice. So each key is retried once
+and every key still unredirected is logged with the connection it should name,
+so the mapping can be replayed by hand; the run then raises
+`RebalanceIncomplete` rather than reporting success.
+
+**Run a rebalance with `SHARDING_PIN_BY_KEY=false`.** A pinned read finds a row
+only where its key currently says it is, and for the length of the move that is
+not where every row is. Unpinned, a read fans out and finds a row wherever it
+happens to be — which is what makes both the move itself and a re-run after an
+interrupted one safe.
+
+The range bounds `--start` and `--end` apply to the shard key, and paging,
+existence checks, updates and deletes to the row key.
+
+**A rebalance is two passes, and the first one writes nothing.** It reads every
+row that would move and refuses the whole run if any destination is occupied by
+a different row — the failure it can predict, and the common one. So a clash
+never leaves half the range moved.
+
+**A run that leaves any row behind raises `RebalanceIncomplete` rather than
+returning a count**, and skips both metadata steps — `rowMoved()` and
+`afterRebalance()`. That hook is where a range
+strategy hands the range over to the new connection, and doing it while rows
+are still on the old one is exactly what makes them unreachable: the routing
+names one shard, the data is on another, and retiring the old one loses it. The
+count alone could not carry this — zero moved reads the same whether there was
+nothing to do or everything was refused. `shards:rebalance` catches it, prints
+the reason and exits non-zero.
+
 ### ID generation
 
 Unique identifiers are generated using strategies defined in `config/sharding.php`.
@@ -95,14 +234,73 @@ A table may override the generator via the `id_generator` option in its configur
 3. Move rows with the rebalance command:
 
    ```bash
-   php artisan shards:rebalance items --from=shard-1 --to=shard-10
+   php artisan shards:rebalance "App\Models\User" "App\Models\UserRole" --from=shard-1 --to=shard-10
    ```
 
-   Use `--start` and `--end` to limit the ID range. Supported strategies update any
-   metadata, such as Redis mappings, during the move.
+   **The arguments are model classes, one per table of the colocation group.**
+   A table name alone cannot find the model on an application that keeps its
+   models outside `App\Models`, and only the model knows which column its own
+   shard key lives in — which for a colocated table is not the primary key. A
+   short name is still resolved against `App\Models` for anyone it worked for
+   before.
+
+   Every populated table of the group has to be named: the routing being handed
+   over belongs to the group, so moving one table would strand the others
+   behind it. A sibling with nothing in it may be left out.
+
+   Use `--start` and `--end` to limit the range. **They bound the shard key, not
+   the primary key** — for a colocated table those are different columns, and
+   the shard key is what decides which connection a row belongs on. On
+   `user_roles`, keyed by `user_id`, a range picks users and moves every role
+   each of them has. Supported strategies update any metadata, such as Redis
+   mappings, during the move.
 
 4. After all data is copied, remove the shard from `DB_SHARDS` and clear
    `DB_SHARD_MIGRATIONS`.
+
+## What a query costs
+
+Sharding is a promise about round trips: a read that names its key touches the
+one connection that holds it and nothing else. The promise is easy to keep in
+the SQL and easy to break in the trips around it, so the package asserts a
+budget in its own tests — per connection, on the warm path — and this is what
+it holds to:
+
+| Operation | Shard queries | Metadata queries |
+|---|---|---|
+| `Model::query()` | 0 | 0 |
+| `Model::where(shardKey, v)->get()` | 1 | 0 |
+| `Model::create([...shardKey => v])`, slot already known | 1 | 0 |
+| `firstOrCreate([shardKey => v, ...])`, row exists | 1 | 0 |
+| a key the routing has never seen | 1 | 1, once |
+
+Three things had to change for that table to be true, and each of them was
+invisible in the SQL a developer looks at.
+
+**A keyless model is given a grammar, not a route.** Eloquent asks the model for
+its connection whenever it builds a query builder, and the trait used to answer
+by generating a key and resolving the shard for it — a metadata round trip per
+`Model::query()`, spent on a connection `ShardBuilder` then decides for itself.
+The first configured connection answers now; placement is decided only when a
+row is written.
+
+**Routing is cached.** `db_hash_range` keeps its slots in a table on the
+metadata connection, so a pinned read paid a lookup there before it could run —
+which on two shards made it slower than the fan-out it replaced. The lookup is
+remembered in the cache store named by `sharding.routing_cache`, written through
+by `recordMeta()` and `rowMoved()` whenever the strategy changes the routing
+itself, and namespaced by the connection list so a change of topology is a new
+namespace rather than a window of stale answers. A store that cannot be reached
+is not consulted.
+
+**Recording a slot is skipped when the cache already says so.** The `created`
+hook records the slot after every insert, in a transaction with a locked read;
+when the cache holds exactly the placement about to be written there is nothing
+to write.
+
+`db_range` is not cached: a rebalance can re-home a sub-range of one of its
+ranges, so a key's range cannot be named without asking. `redis` is a cache
+already.
 
 ## Groups
 
@@ -191,6 +389,30 @@ answer any read in this package: every per-shard copy of a query carries an
 unconditional `is_replica = false`, so a query sent to a replica comes back
 empty by construction. Pinning to the primary therefore loses nothing, and
 reading the copies would cost a round trip for a certainty.
+
+### Repairing placement
+
+A row is placed by its shard key when it is written. Anything written before
+that was true, moved by hand, or restored from a dump taken on another topology
+can be sitting on a shard its key does not name — and a fan-out finds such a
+row anyway, which is how it goes unnoticed. A keyed read does not.
+
+```bash
+# how many rows are not where they belong, moving nothing
+php artisan shards:distribute "App\Models\User" "App\Models\UserRole" --dry-run
+
+# and then move them
+php artisan shards:distribute "App\Models\User" "App\Models\UserRole"
+```
+
+One model per table, because the tables of a colocation group share a key but
+not the column it lives in: `users.id` and `user_roles.user_id` are the same
+key under two names, and only the model knows its own. A group swept in part is
+the one state to avoid, so the command names the tables left over.
+
+Replica copies are left alone: a replica belongs on a replica connection rather
+than on the primary its key names, and moving one by that rule would break the
+pair it is half of.
 
 `sharding.pin_by_key` turns it off. Do that while rebalancing:
 `shards:rebalance` moves rows and updates slots without atomicity between the

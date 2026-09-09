@@ -4,6 +4,7 @@ namespace Allnetru\Sharding\Strategies;
 
 use Allnetru\Sharding\Models\ShardSlot;
 use Allnetru\Sharding\Support\Database\UniqueConstraintViolationDetector;
+use Allnetru\Sharding\Support\RoutingCache;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
@@ -24,17 +25,45 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
      */
     public function determine(mixed $key, array $config): array
     {
-        $hash = (int) sprintf('%u', crc32((string) $key));
-        $slotSize = $config['slot_size'] ?? 1_000_000;
-        $slotId = intdiv($hash, $slotSize);
-
-        $metaConnection = $config['meta_connection'] ?? 'mysql';
-        $slotTable = $config['slot_table'] ?? 'shard_slots';
+        $slotId = $this->slotFor($key, $config);
         $scope = $config['group'] ?? $config['table'] ?? null;
 
         if (!$scope) {
             throw new InvalidArgumentException('No table scope provided for sharding.');
         }
+
+        /*
+        | Remembered rather than looked up per query. The slot table is on the
+        | metadata connection, so without this every pinned read paid a round
+        | trip there before it could run — which on two shards made the pinned
+        | read slower than the fan-out it replaced. `recordMeta()` and
+        | `rowMoved()` write through, so the cache lags the metadata by the
+        | length of one write.
+        */
+        return RoutingCache::remember(
+            RoutingCache::namespaceFor($config),
+            "slot:{$slotId}",
+            fn (): array => $this->lookUp($slotId, $scope, $config),
+        );
+    }
+
+    /**
+     * The slot's placement as the metadata has it, or as the hash would have it.
+     *
+     * The two are told apart in the answer. A hashed placement is worth
+     * remembering — it is what the row will be written by — but it is not
+     * evidence the slot was ever recorded, and `recordMeta()` skips its write
+     * only when the metadata is known to hold this already.
+     *
+     * @param int $slotId
+     * @param string $scope
+     * @param array<string, mixed> $config
+     * @return array{placement: list<string>, recorded: bool}
+     */
+    protected function lookUp(int $slotId, string $scope, array $config): array
+    {
+        $metaConnection = $config['meta_connection'] ?? 'mysql';
+        $slotTable = $config['slot_table'] ?? 'shard_slots';
 
         $slot = ShardSlot::on($metaConnection)->from($slotTable)
             ->where('table', $scope)
@@ -55,7 +84,7 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
                 $replicas = $this->buildReplicas($connections, $index, $config['replica_count']);
             }
 
-            return array_merge([$primary], $replicas);
+            return ['placement' => array_merge([$primary], array_values($replicas)), 'recorded' => true];
         }
 
         $primary = app(HashStrategy::class)->determine($slotId, $config)[0];
@@ -64,7 +93,22 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
         $index = array_search($primary, $connections, true);
         $replicas = $this->buildReplicas($connections, $index, $config['replica_count'] ?? 0);
 
-        return array_merge([$primary], $replicas);
+        return ['placement' => array_merge([$primary], $replicas), 'recorded' => false];
+    }
+
+    /**
+     * The slot a key hashes into.
+     *
+     * @param mixed $key
+     * @param array<string, mixed> $config
+     * @return int
+     */
+    protected function slotFor(mixed $key, array $config): int
+    {
+        $hash = (int) sprintf('%u', crc32((string) $key));
+        $slotSize = $config['slot_size'] ?? 1_000_000;
+
+        return intdiv($hash, $slotSize);
     }
 
     /**
@@ -72,9 +116,7 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
      */
     public function recordMeta(mixed $key, array $connections, array $config): void
     {
-        $hash = (int) sprintf('%u', crc32((string) $key));
-        $slotSize = $config['slot_size'] ?? 1_000_000;
-        $slotId = intdiv($hash, $slotSize);
+        $slotId = $this->slotFor($key, $config);
         $metaConnection = $config['meta_connection'] ?? 'mysql';
         $slotTable = $config['slot_table'] ?? 'shard_slots';
         $scope = $config['group'] ?? $config['table'] ?? null;
@@ -85,6 +127,21 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
 
         $primary = $connections[0] ?? '';
         $replicas = array_slice($connections, 1);
+
+        /*
+        | Called after every insert, and a slot is recorded once. When the
+        | cache already says what is about to be written there is nothing to
+        | write: the transaction below is a locked read and a save on the
+        | metadata connection — three round trips per insert to write down
+        | what the metadata already said.
+        */
+        $namespace = RoutingCache::namespaceFor($config);
+        $placement = array_merge([$primary], $replicas);
+        $known = RoutingCache::get($namespace, "slot:{$slotId}");
+
+        if ($known !== null && $known['recorded'] && $known['placement'] === $placement) {
+            return;
+        }
 
         DB::connection($metaConnection)->transaction(function () use ($scope, $slotId, $slotTable, $metaConnection, $primary, $replicas) {
             $query = ShardSlot::on($metaConnection)->from($slotTable)->where('table', $scope);
@@ -108,6 +165,8 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
             $slotModel->setTable($slotTable);
             $slotModel->save();
         });
+
+        RoutingCache::put($namespace, "slot:{$slotId}", $placement, true);
     }
 
     /**
@@ -115,9 +174,7 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
      */
     public function recordReplica(mixed $key, string $connection, array $config): void
     {
-        $hash = (int) sprintf('%u', crc32((string) $key));
-        $slotSize = $config['slot_size'] ?? 1_000_000;
-        $slotId = intdiv($hash, $slotSize);
+        $slotId = $this->slotFor($key, $config);
         $metaConnection = $config['meta_connection'] ?? 'mysql';
         $slotTable = $config['slot_table'] ?? 'shard_slots';
         $scope = $config['group'] ?? $config['table'] ?? null;
@@ -154,6 +211,9 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
             $slotModel->setTable($slotTable);
             $slotModel->save();
         });
+
+        // the placement changed shape and the next lookup should read it
+        RoutingCache::forget(RoutingCache::namespaceFor($config), "slot:{$slotId}");
     }
 
     /**
@@ -174,9 +234,7 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
      */
     public function rowMoved(int|string $id, string $connection, array $config): void
     {
-        $hash = (int) sprintf('%u', crc32((string) $id));
-        $slotSize = $config['slot_size'] ?? 1_000_000;
-        $slotId = intdiv($hash, $slotSize);
+        $slotId = $this->slotFor($id, $config);
         $metaConnection = $config['meta_connection'] ?? 'mysql';
         $slotTable = $config['slot_table'] ?? 'shard_slots';
         $scope = $config['group'] ?? $config['table'] ?? '';
@@ -186,7 +244,7 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
         $index = array_search($connection, $connections, true);
         $defaultReplicas = $this->buildReplicas($connections, $index, $config['replica_count'] ?? 0);
 
-        DB::connection($metaConnection)->transaction(function () use ($scope, $slotId, $slotTable, $metaConnection, $connection, $defaultReplicas) {
+        $placement = DB::connection($metaConnection)->transaction(function () use ($scope, $slotId, $slotTable, $metaConnection, $connection, $defaultReplicas): array {
             $query = ShardSlot::on($metaConnection)->from($slotTable)->where('table', $scope);
 
             while (true) {
@@ -207,7 +265,7 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
                     $slot->setAttribute('replicas', $replicas);
                     $slot->save();
 
-                    return;
+                    return array_merge([$connection], array_values($replicas));
                 }
 
                 try {
@@ -221,7 +279,7 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
                     $slotModel->setTable($slotTable);
                     $slotModel->save();
 
-                    return;
+                    return array_merge([$connection], $defaultReplicas);
                 } catch (QueryException $e) {
                     if (!UniqueConstraintViolationDetector::causedBy($e)) {
                         throw $e;
@@ -231,6 +289,13 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
                 }
             }
         });
+
+        /*
+        | Written through, and this is what makes the cache safe to have: the
+        | routing changed here, so every process sharing the store sees the new
+        | placement from the next lookup on, rather than after a TTL.
+        */
+        RoutingCache::put(RoutingCache::namespaceFor($config), "slot:{$slotId}", $placement, true);
     }
 
     /**

@@ -45,7 +45,7 @@ trait Shardable
     /**
      * Insert the row on the connection its own shard key names.
      *
-     * **This is what makes a row land where its key says it should**, and
+     * This is what makes a row land where its key says it should, and
      * until it existed no row reliably did. `Model::save()` builds the query
      * and only then fires `creating`, so the hook that chose the connection
      * was always too late: the statement had already been aimed. Two paths
@@ -351,6 +351,22 @@ trait Shardable
     /**
      * Get the primary connection name for the model.
      *
+     * A model without a key is not routed, it is given a grammar. Eloquent
+     * asks for the connection whenever it builds a query — `Model::query()`
+     * goes through `newBaseQueryBuilder()`, which needs one to pick a grammar
+     * from — and this used to answer a keyless model by generating a key,
+     * writing it onto the model and resolving the shard for it. That was a
+     * metadata round trip per query builder, spent on a connection
+     * `ShardBuilder` then decided for itself, and it left every fresh instance
+     * carrying a random key that some caller would eventually read.
+     *
+     * The first configured connection answers instead: all shards share a
+     * grammar, and nothing about a keyless model can say which of them it
+     * belongs on. Not remembered on the model, so a key set afterwards is
+     * routed the moment it is asked about. Placement — the connection a row
+     * is actually written to — is decided by `resolveShardPlacement()` and
+     * nowhere else.
+     *
      * @return string
      */
     public function getConnectionName()
@@ -359,15 +375,17 @@ trait Shardable
             return $this->connection;
         }
 
+        $manager = app(ShardingManager::class);
         $keyName = $this->getShardKey();
         $key = $this->getAttribute($keyName);
 
         if (!$key) {
-            $key = app(IdGenerator::class)->generate($this);
-            $this->setAttribute($keyName, $key);
+            $names = array_keys((array) $manager->connectionsFor($this));
+
+            return $names[0] ?? parent::getConnectionName();
         }
 
-        $connections = app(ShardingManager::class)->connectionFor($this, $key);
+        $connections = $manager->connectionFor($this, $key);
         $this->connection = $connections[0];
         $this->replicaConnections = array_slice($connections, 1);
 
