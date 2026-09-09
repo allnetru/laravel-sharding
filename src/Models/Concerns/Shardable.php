@@ -68,7 +68,7 @@ trait Shardable
      * `creating` hook keeps calling the same method: it is idempotent, and
      * anything that saves through another path still gets routed.
      *
-     * @param \Illuminate\Database\Eloquent\Builder<static> $query
+     * @param Builder<static> $query
      * @return bool
      */
     protected function performInsert(Builder $query)
