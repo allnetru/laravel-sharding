@@ -368,16 +368,21 @@ class Distribute extends Command
      * replica connections, so there is nothing left behind to demote either —
      * the row has to be written there.
      *
-     * **Nothing is overwritten before the rows are compared.** A connection
-     * can already hold that primary key for three reasons, and only the third
-     * is a refusal: a replica of this same row, this same row left by a run
-     * interrupted between the write and the delete, or a different row that
-     * happens to share the identifier. That last one is what adopting sharding
-     * over databases which counted their own identifiers looks like, and both
-     * rows are real data. What the occupant claims to be does not settle it —
-     * a replica marked as such can be the replica of that other row, and
-     * promoting it destroys a copy the metadata still promises. So the
-     * comparison comes first and applies to every occupant.
+     * **Every destination is inspected before any of them is written.** A
+     * connection can already hold that primary key for three reasons, and only
+     * the third is a refusal: a replica of this same row, this same row left
+     * by a run interrupted between the write and the delete, or a different
+     * row that happens to share the identifier. That last one is what adopting
+     * sharding over databases which counted their own identifiers looks like,
+     * and both rows are real data. What the occupant claims to be does not
+     * settle it — a replica marked as such can be the replica of that other
+     * row, and promoting it destroys a copy the metadata still promises.
+     *
+     * The inspection is a pass of its own rather than a check inside each
+     * write, because a collision found halfway through is worse than one found
+     * at the start: the primary is already on the target, the source has not
+     * been released, and both copies claim to be the row — so a fan-out read
+     * returns it twice, while the command reports that it was left alone.
      *
      * @param string $table
      * @param string $rowKey The primary key.
@@ -388,42 +393,90 @@ class Distribute extends Command
      */
     protected function carry(string $table, string $rowKey, array $attributes, string $source, array $placement): ?string
     {
-        $target = $placement[0];
-        $replicas = array_slice($placement, 1);
         $id = $attributes[$rowKey] ?? null;
+        $destinations = $this->destinations($attributes, $source, $placement);
+
+        foreach (array_keys($destinations) as $connection) {
+            if (!$this->vacantFor($table, $rowKey, $id, $attributes, $connection)) {
+                return $connection;
+            }
+        }
 
         /*
-        | Written before it is removed, and deliberately in that order.
-        | Interrupted between the two this leaves the row on both connections,
-        | which the comparison corrects on a re-run. The other order loses the
-        | row.
+        | Written before the source is released, and deliberately in that
+        | order. Interrupted between the two this leaves the row on both
+        | connections, which the inspection above accepts on a re-run. The
+        | other order loses the row.
         */
-        if (!$this->place($table, $rowKey, $id, $attributes, $target, false)) {
-            return $target;
+        foreach ($destinations as $connection => $asReplica) {
+            $this->place($table, $rowKey, $id, $attributes, $connection, $asReplica);
         }
 
-        foreach ($replicas as $replica) {
-            /*
-            | The copy on the source becomes this replica rather than being
-            | written a second time — it is already the right bytes on the
-            | right connection.
-            */
-            if ($replica === $source) {
-                continue;
-            }
-
-            if (!$this->place($table, $rowKey, $id, $attributes, $replica, true)) {
-                return $replica;
-            }
-        }
-
-        $this->releaseSource($table, $rowKey, $id, $attributes, $source, $replicas);
+        $this->releaseSource($table, $rowKey, $id, $attributes, $source, array_slice($placement, 1));
 
         return null;
     }
 
     /**
+     * The connections this row has to be written to, and what each one holds.
+     *
+     * The primary comes first, because it has to be written first.
+     *
+     * @param array<string, mixed> $attributes The row as it is on the source.
+     * @param string $source
+     * @param list<string> $placement
+     * @return array<string, bool> Connection name to whether it holds a replica.
+     */
+    protected function destinations(array $attributes, string $source, array $placement): array
+    {
+        $destinations = [$placement[0] => false];
+        $marks = array_key_exists('is_replica', $attributes);
+
+        foreach (array_slice($placement, 1) as $replica) {
+            /*
+            | The copy on the source becomes this replica rather than being
+            | written a second time — it is already the right bytes on the
+            | right connection. And a table without the column cannot say
+            | which copy is the row, so it cannot hold replicas at all.
+            */
+            if ($replica === $source || !$marks) {
+                continue;
+            }
+
+            $destinations[$replica] = true;
+        }
+
+        return $destinations;
+    }
+
+    /**
+     * Whether a connection is free to take this row.
+     *
+     * @param string $table
+     * @param string $rowKey
+     * @param mixed $id
+     * @param array<string, mixed> $attributes The row as it is on the source.
+     * @param string $connection
+     * @return bool
+     */
+    protected function vacantFor(
+        string $table,
+        string $rowKey,
+        mixed $id,
+        array $attributes,
+        string $connection,
+    ): bool {
+        $existing = DB::connection($connection)->table($table)->where($rowKey, $id)->first();
+
+        return $existing === null || $this->sameRow((array) $existing, $attributes);
+    }
+
+    /**
      * Put the row on one connection, as the primary or as a replica.
+     *
+     * The occupant, if any, has already been established to be this same row.
+     * Writing over it is what settles which copy it is, and repeating the
+     * write is what makes an interrupted run recoverable.
      *
      * @param string $table
      * @param string $rowKey
@@ -431,7 +484,7 @@ class Distribute extends Command
      * @param array<string, mixed> $attributes The row as it is on the source.
      * @param string $connection
      * @param bool $asReplica Whether this connection holds a copy rather than the row.
-     * @return bool Whether the connection now holds it; false when a different row is in the way.
+     * @return void
      */
     protected function place(
         string $table,
@@ -440,33 +493,20 @@ class Distribute extends Command
         array $attributes,
         string $connection,
         bool $asReplica,
-    ): bool {
-        $marks = array_key_exists('is_replica', $attributes);
+    ): void {
+        $wanted = array_key_exists('is_replica', $attributes)
+            ? array_merge($attributes, ['is_replica' => $asReplica])
+            : $attributes;
 
-        // a table without the column cannot say which copy is the row, so it
-        // cannot hold replicas at all and there is nothing to write there
-        if ($asReplica && !$marks) {
-            return true;
+        $row = DB::connection($connection)->table($table)->where($rowKey, $id);
+
+        if ($row->exists()) {
+            $row->update($wanted);
+
+            return;
         }
 
-        $wanted = $marks ? array_merge($attributes, ['is_replica' => $asReplica]) : $attributes;
-        $existing = DB::connection($connection)->table($table)->where($rowKey, $id)->first();
-
-        if ($existing === null) {
-            DB::connection($connection)->table($table)->insert($wanted);
-
-            return true;
-        }
-
-        if (!$this->sameRow((array) $existing, $attributes)) {
-            return false;
-        }
-
-        // already this row: the write settles which copy it is, and repeating
-        // it is what makes an interrupted run recoverable
-        DB::connection($connection)->table($table)->where($rowKey, $id)->update($wanted);
-
-        return true;
+        DB::connection($connection)->table($table)->insert($wanted);
     }
 
     /**

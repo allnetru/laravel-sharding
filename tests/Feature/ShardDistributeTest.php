@@ -411,6 +411,80 @@ class ShardDistributeTest extends TestCase
      */
     public function testTheReplicasOfAMovedRowAreWritten(): void
     {
+        [$placement, $source] = $this->threeShardsWithAReplica();
+
+        DB::connection($source)->table('holders')->insert(['id' => 1, 'name' => 'mine', 'is_replica' => false]);
+
+        $this->artisan('shards:distribute', ['model' => [Holder::class]])->assertSuccessful();
+
+        $primary = DB::connection($placement[0])->table('holders')->where('id', 1)->first();
+        $replica = DB::connection($placement[1])->table('holders')->where('id', 1)->first();
+
+        $this->assertNotNull($primary, 'the primary did not arrive');
+        $this->assertEmpty($primary->is_replica);
+        $this->assertNotNull($replica, 'the replica this key is advertised as having was never written');
+        $this->assertNotEmpty($replica->is_replica, 'the copy arrived claiming to be the row');
+        $this->assertNull(
+            DB::connection($source)->table('holders')->where('id', 1)->first(),
+            'the source kept a copy it is not a connection for',
+        );
+    }
+
+    /**
+     * A collision on a replica connection stops the row from moving at all.
+     *
+     * The inspection used to happen inside each write, so a clash on the
+     * second destination was found with the primary already on the target and
+     * the source not yet released — two copies both claiming to be the row,
+     * which a fan-out read returns twice, while the command reported that the
+     * row had been left alone. Found in review.
+     *
+     * @return void
+     */
+    public function testACollisionOnAReplicaLeavesEverythingWhereItWas(): void
+    {
+        [$placement, $source] = $this->threeShardsWithAReplica();
+
+        DB::connection($source)->table('holders')->insert(['id' => 1, 'name' => 'mine', 'is_replica' => false]);
+        /*
+        | Marked as a replica so the sweep leaves it alone — it is the replica
+        | of some other row that happens to share the identifier, which is
+        | exactly the occupant whose claim about itself must not be believed.
+        */
+        DB::connection($placement[1])->table('holders')->insert([
+            'id' => 1,
+            'name' => 'somebody else',
+            'is_replica' => true,
+        ]);
+
+        $this->artisan('shards:distribute', ['model' => [Holder::class]])->assertFailed();
+
+        $this->assertSame(
+            'mine',
+            DB::connection($source)->table('holders')->where('id', 1)->value('name'),
+            'the source was released even though the row never fully arrived',
+        );
+        $this->assertNull(
+            DB::connection($placement[0])->table('holders')->where('id', 1)->first(),
+            'the primary was written before the replica destination was inspected',
+        );
+        $this->assertSame(
+            'somebody else',
+            DB::connection($placement[1])->table('holders')->where('id', 1)->value('name'),
+        );
+    }
+
+    /**
+     * Three shards, one replica, and a connection this key does not name.
+     *
+     * The interesting topology: the source is neither the primary nor the
+     * replica of the key, so there is nothing there to demote and the replica
+     * has to be written rather than left behind.
+     *
+     * @return array{0: list<string>, 1: string} The placement, and the odd connection out.
+     */
+    protected function threeShardsWithAReplica(): array
+    {
         config([
             'database.connections.shard_3' => ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => ''],
             'sharding.connections' => [
@@ -429,33 +503,17 @@ class ShardDistributeTest extends TestCase
 
         app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
 
-        $placement = app(ShardingManager::class)->connectionFor(new Holder(), 1);
+        $placement = array_values(app(ShardingManager::class)->connectionFor(new Holder(), 1));
 
-        $this->assertCount(2, $placement);
+        $this->assertCount(2, $placement, 'the replica was not configured');
 
-        // the one connection this key names neither as its primary nor as its
-        // replica: from there the source cannot be demoted into the replica
         $source = collect(['shard_1', 'shard_2', 'shard_3'])
             ->reject(fn (string $name): bool => in_array($name, $placement, true))
             ->first();
 
         $this->assertNotNull($source, 'three shards and a placement of two should leave one over');
 
-        DB::connection($source)->table('holders')->insert(['id' => 1, 'name' => 'mine', 'is_replica' => false]);
-
-        $this->artisan('shards:distribute', ['model' => [Holder::class]])->assertSuccessful();
-
-        $primary = DB::connection($placement[0])->table('holders')->where('id', 1)->first();
-        $replica = DB::connection($placement[1])->table('holders')->where('id', 1)->first();
-
-        $this->assertNotNull($primary, 'the primary did not arrive');
-        $this->assertEmpty($primary->is_replica);
-        $this->assertNotNull($replica, 'the replica this key is advertised as having was never written');
-        $this->assertNotEmpty($replica->is_replica, 'the copy arrived claiming to be the row');
-        $this->assertNull(
-            DB::connection($source)->table('holders')->where('id', 1)->first(),
-            'the source kept a copy it is not a connection for',
-        );
+        return [$placement, $source];
     }
 
     /**
