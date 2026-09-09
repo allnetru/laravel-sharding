@@ -5,49 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v0.4.0 - 2026-09-09
+## v0.3.14 - 2026-09-08
 
 ### What's Changed
 
-* fix: a row did not land on the shard its key names, and a keyed query read every shard anyway
-
-Both halves were found on a stand deliberately given a second shard, and neither can be seen on one. The first is a data-placement bug that nothing failed on, because the second was covering for it.
+* fix: a morphTo on a sharded model was fatal before its type was set by @allnetru in https://github.com/allnetru/laravel-sharding/pull/73
 
 ### Fixed
 
-* **A row did not reliably land on the shard its own key names.** `Model::save()` builds its query and only then fires `creating`, so the hook that chose the connection was always too late: the statement had already been aimed. Two paths made that visible, and between them they cover how applications actually write.
-
-  `Model::create()` goes through `Builder::newModelInstance()`, which copies the connection of the blank model the builder was made from — and that model had no key, so it had been routed by a generated throwaway one. A model whose key is a snowflake had no key at query-build time either, so the insert went wherever the instance happened to point.
-
-  Measured on two shards: of six rows created through `Model::create()` with keys given by hand, four sat on a shard their key does not name; the model reported one connection and the bytes were on another.
-
-  **Nothing ever failed, and that is why it lasted.** Every read fans out across all shards and merges, so a misplaced row is found anyway. It surfaces the moment anything trusts the key: a read pinned to one shard, `shards:distribute` deciding a row is already in place, a rebalance moving it by a slot it does not match.
-
-  The placement now happens in `performInsert()`, before the query exists, and the `creating` hook calls the same idempotent method so every other save path is still routed. `tests/Unit/ShardPlacementTest.php` asserts where the bytes are, read through a plain connection rather than through the model — asking the model would ask the same code that decides the answer.
+* **A `morphTo` on a sharded model threw before its type was assigned.** `ShardMorphTo::addConstraints()` resolves the related model straight away so it can pick the shard — earlier than stock Eloquent resolves anything, since `MorphTo` does not override `addConstraints` at all and waits until the results are fetched. Resolving early is what lets a colocated morph read one shard instead of every one, and it means the method has to survive states stock code never resolves a model in.
+  
+  One of those is an unsaved row whose morph is about to be assigned. `spatie/laravel-activitylog` builds an entry and reads `$activity->subject` before setting `subject_type`, so `createModelByType(null)` ran on every logged save: `Class name must be a valid object or a string`, thrown from inside a model event on an ordinary `Model::create()`.
+  
+  With no type there is no related table, no key to constrain on and no shard to choose, so the relation now falls through to `BelongsTo` — exactly what stock `MorphTo` does, and its `getResults()` answers null while the type is missing.
+  
 
 ### Added
 
-* **A query that names its shard key now reads only the shards it can be on.** Until now nothing looked at a query at all: `where('tenant_id', 5)` still opened a cursor on every shard and merged the results. Correct, and N times the work, which made "a query has to know its key" a rule that bought the shape of a schema and nothing else. Only `onShardConnection()` and the relation resolver ever narrowed anything.
+* `tests/Unit/ShardMorphToTest.php`. Two of its three cases fail without the fix; the third pins that a morph **with** a type still resolves, so the guard cannot buy safety by breaking the reason the class exists.
 
-  This is partition pruning, not a new contract: it changes how many connections are asked, never what a query returns. The soundness argument is one sentence — with no `or` at the top level the predicate is a conjunction, and a conjunction containing `key = value` can only match rows whose key is that value. Anything else ANDed beside it narrows the result further and can never add a row from another shard, so it does not have to be understood at all.
-
-  Which is why anything unrecognised is left alone rather than reasoned about. An `or` at the top level, a key only inside a nested group, an expression instead of a value, a qualified column belonging to a joined table: all of them fall back to the fan-out. A query pinned when it should have fanned out does not answer slowly, it answers **incompletely**, and that is the one failure this package must not have.
-
-  It applies to everything that fans out, reads and keyed writes alike, because it narrows the single list they all share. `whereIn` on the key is pinned too, up to a hundred values.
-
-* **`sharding.pin_by_key`**, default on. Turn it off while rebalancing: `shards:rebalance` moves rows and updates slots without atomicity between the two, so for the length of a move a row can sit on one connection while its slot names another. A fan-out finds it either way.
-
-### Upgrading
-
-**If you already run more than one shard, some of your rows are on the wrong one** — written there by the bug above. Reads found them because they fanned out; pinned reads will not.
-
-So on such a deployment, in this order:
-
-1. deploy with `SHARDING_PIN_BY_KEY=false`;
-2. put the existing rows where their keys name — `shards:distribute` for the tables concerned;
-3. turn pinning on.
-
-A deployment with one connection has nothing to do: there is no wrong shard to be on, and pinning resolves to the only connection there is.
+**Full Changelog**: https://github.com/allnetru/laravel-sharding/compare/v0.3.13...v0.3.14
 
 ## v0.3.13 - 2026-09-08
 
