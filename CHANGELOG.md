@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.4.1 - 2026-09-09
+
+### What's Changed
+
+* fix: pinning must not lose rows — negation, unions, global scopes and replicas by @allnetru in https://github.com/allnetru/laravel-sharding/pull/77
+
+Four findings from the review of #75, and **three of them lose rows in v0.4.0**. Anyone on v0.4.0 should move to this one. Every fix below fails a test against v0.4.0 and passes here.
+
+### Fixed
+
+* **A negated equality was read as an equality, and rows went missing.** The most dangerous of the four because it reads like the safest clause there is: Laravel writes `whereNot('id', 1)` as an ordinary `Basic` equality whose boolean is «and not», and the guard rejected only booleans containing `or`. So the predicate was read as `id = 1` and the query pinned to that key's shard — while the predicate it runs matches every **other** identifier, all of which live elsewhere. Measured: three rows expected, two returned.
+  
+* **Unions were not read at all.** `where('id', 1)->union(where('id', 2))` pinned to the first key's shard and ran the union arm on that same connection, so the second row was not found. Routing a union means agreeing on the shards of every arm; until that exists, a query with any union fans out.
+  
+* **Global scopes were applied after the routing decision.** `ShardBuilder::get()` copies the scopes onto each per-shard builder rather than applying them to the one the decision is made on, so a scope adding a top-level `orWhere` was invisible to it: the query was pinned on a predicate narrower than the one executed, and the rows the scope existed to admit were lost. The predicate is now read after `applyScopes()`, which answers on a clone.
+  
+* **Replicas were read for nothing.** `connectionFor()` answers with the primary followed by its replicas, and a replica cannot answer any read in this package: `replicateForConnection()` puts an unconditional `is_replica = false` on every per-shard copy, so a query sent there comes back empty by construction. With the default `replica_count` of 1 a keyed read still touched two connections — which in a two-shard deployment is every shard there is, so the one-shard read was not one. Only the primary is read now.
+  
+
+### Changed
+
+* The documented list of what falls back to a fan-out grew three rows: a negated key, a union, and a model whose global scope widens the predicate. `docs/en/sharding.md` carries the table.
+  
+* `ShardMorphToTest` placed a fixture row by hand on a shard its key does not name; until v0.4.0 the fan-out covered for that. It now inserts where the key points. **That is the upgrade note of v0.4.0 demonstrating itself** — worth knowing for anyone whose fixtures do the same.
+  
+
+### Upgrading
+
+From v0.4.0: nothing to do beyond updating, and do update — three of the fixes above are silent data loss.
+
+From v0.3.x: the note of v0.4.0 still applies. If you already run more than one shard, some rows sit on a shard their key does not name; deploy with `SHARDING_PIN_BY_KEY=false`, put them where their keys name them, then turn pinning on.
+
 ## v0.4.0 - 2026-09-09
 
 ### What's Changed
