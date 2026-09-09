@@ -140,6 +140,37 @@ class ShardRebalanceGroupOwnerTest extends TestCase
     }
 
     /**
+     * An active connection that routes the table and has not got it is refused.
+     *
+     * Leaving it out of the scans does not leave it out of `connectionFor()`:
+     * the rows would move, the routing would be handed over, and the pass that
+     * makes the placement real would die on the missing table with the metadata
+     * already advertising a replica that cannot exist. Found in review — and it
+     * was my own fix from the round before, which skipped such a connection
+     * instead of refusing it.
+     *
+     * @return void
+     */
+    public function testAnActiveConnectionWithoutTheTableIsRefused(): void
+    {
+        config([
+            'database.connections.shard_3' => ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => ''],
+            'sharding.connections' => [
+                'shard_1' => ['weight' => 1],
+                'shard_2' => ['weight' => 1],
+                // active, routed to, and without the table
+                'shard_3' => ['weight' => 1],
+            ],
+        ]);
+
+        app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
+
+        $this->artisan('shards:rebalance', ['model' => OwnedNote::class])->assertFailed();
+
+        $this->assertNull(RecordingStrategy::$config, 'the rebalance ran against a schema it would die on');
+    }
+
+    /**
      * A range bound that is not a number is refused, not quietly turned to 0.
      *
      * A slot is a numeric range and the bounds apply to the shard key, so a

@@ -8,7 +8,6 @@ use Allnetru\Sharding\ShardingManager;
 use Allnetru\Sharding\Support\RowComparison;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Schema;
 
 /**
  * Shared logic for moving rows between shard connections.
@@ -295,8 +294,14 @@ trait Rebalanceable
      * table may not exist yet, and a scan across the whole topology then died
      * on an unknown table before anything had moved.
      *
-     * A connection whose table is absent is dropped as well. There is nothing
-     * to find there, and nothing routes to it either.
+     * **Only those.** An active connection whose table is absent is not
+     * skipped, because skipping it does not stop `connectionFor()` naming it
+     * as a destination — the rows would move, the routing would be handed
+     * over, and the placement pass would then die on the missing table with
+     * the metadata already advertising a replica that cannot exist. That is a
+     * schema the run must not be attempted against, and `shards:rebalance`
+     * refuses it before starting. A caller reaching the trait directly gets
+     * the driver's own error, which is loud if inelegant.
      *
      * @param ShardingManager $manager
      * @param string $table
@@ -309,10 +314,6 @@ trait Rebalanceable
 
         foreach (array_keys((array) $manager->connectionsFor($table)) as $connection) {
             if (array_key_exists($connection, $migrating)) {
-                continue;
-            }
-
-            if (!Schema::connection($connection)->hasTable($table)) {
                 continue;
             }
 

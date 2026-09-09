@@ -6,6 +6,7 @@ use Allnetru\Sharding\Console\Commands\Shards\Concerns\ResolvesShardModel;
 use Allnetru\Sharding\Exceptions\RebalanceIncomplete;
 use Allnetru\Sharding\ShardingManager;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * Move records between shard connections.
@@ -84,6 +85,27 @@ class Rebalance extends Command
                 . 'this would hand over belongs to the whole group, so their reads would follow it to the '
                 . 'new connection while their rows stayed behind. Rebalancing a populated group is not '
                 . 'something this command can do one table at a time.',
+            );
+
+            return self::FAILURE;
+        }
+
+        /*
+        | Every connection that routes has to have the table. Leaving one out
+        | of the scans does not leave it out of `connectionFor()`: the rows
+        | would move, the routing would be handed over, and the pass that makes
+        | the placement real would die on the missing table with the metadata
+        | already advertising a replica that cannot exist. A connection listed
+        | in DB_SHARD_MIGRATIONS is the exception, because nothing routes there
+        | while it is on that list.
+        */
+        $missing = $this->connectionsWithoutTable($manager, $table);
+
+        if ($missing !== []) {
+            $this->error(
+                'These connections route ' . $table . ' and have no such table: ' . implode(', ', $missing)
+                . '. Rows would be sent to them and the run would die partway. Migrate them first, or list '
+                . 'them in DB_SHARD_MIGRATIONS while they are being prepared.',
             );
 
             return self::FAILURE;
@@ -176,5 +198,30 @@ class Rebalance extends Command
         $this->info("Moved {$moved} records.");
 
         return self::SUCCESS;
+    }
+
+    /**
+     * The routing connections of this table that do not have it.
+     *
+     * @param ShardingManager $manager
+     * @param string $table
+     * @return list<string>
+     */
+    protected function connectionsWithoutTable(ShardingManager $manager, string $table): array
+    {
+        $migrating = (array) config('sharding.migrations', []);
+        $missing = [];
+
+        foreach (array_keys((array) $manager->connectionsFor($table)) as $connection) {
+            if (array_key_exists($connection, $migrating)) {
+                continue;
+            }
+
+            if (!Schema::connection($connection)->hasTable($table)) {
+                $missing[] = (string) $connection;
+            }
+        }
+
+        return $missing;
     }
 }
