@@ -114,25 +114,22 @@ class ShardBuilder extends EloquentBuilder
             /*
             | The primary only, and that is the difference between an
             | optimisation and a gesture. `connectionFor()` answers with the
-            | primary followed by its replicas, and a replica cannot contribute
-            | a row to an ordinary read: every one of them carries
-            | `is_replica = true` and the scope on the model filters those out.
-            | Scheduling a query there would buy nothing and cost a round trip
-            | — and with the package's default of one replica, a keyed read
-            | would still touch two connections, which in a two-shard
-            | deployment is every shard there is.
+            | primary followed by its replicas, and **a replica cannot answer
+            | any read at all**: `replicateForConnection()` puts an
+            | unconditional `is_replica = false` on every per-shard copy, so a
+            | query sent there is guaranteed to come back empty. Scheduling one
+            | costs a round trip for a certainty — and with the package's
+            | default of one replica, a keyed read would still touch two
+            | connections, which in a two-shard deployment is every shard there
+            | is, so the one-shard read would not have been one.
             |
-            | Unless the scope has been removed on purpose, which is the one
-            | way a caller asks to see replica rows. Then their connections are
-            | exactly what the query is about.
+            | Removing the `without_replicas` scope does not change that: the
+            | predicate the copy adds is a `where`, not the scope, and it is
+            | applied before the removals are copied over. Reading the copies
+            | is a feature this package does not have; pinning to the primary
+            | therefore loses nothing.
             */
             $names[(string) ($resolved[0] ?? '')] = true;
-
-            if ($this->readsReplicas()) {
-                foreach (array_slice($resolved, 1) as $name) {
-                    $names[(string) $name] = true;
-                }
-            }
         }
 
         unset($names['']);
@@ -253,23 +250,6 @@ class ShardBuilder extends EloquentBuilder
         }
 
         return null;
-    }
-
-    /**
-     * Whether this read is asking for replica rows.
-     *
-     * The `without_replicas` scope is on every sharded model and filters them
-     * out, so a read that still has it can only be answered by a primary.
-     * Dropping the scope is the one way to ask for the copies, and then their
-     * connections are the point of the query rather than a waste of a round
-     * trip.
-     *
-     * @return bool
-     */
-    protected function readsReplicas(): bool
-    {
-        return in_array('without_replicas', $this->removedScopes, true)
-            || !array_key_exists('without_replicas', $this->scopes);
     }
 
     /**

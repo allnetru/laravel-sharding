@@ -186,10 +186,11 @@ answer slowly, it answers incompletely.
 | `whereRaw('tenant_id = ?', [5])` | every shard — not read |
 | `join('other', ...)->where('other.tenant_id', 5)` | every shard — that column is not ours |
 
-Of the shards a key names, only the **primary** is read: the replicas all carry
-`is_replica = true` and the model's own scope filters them out, so a query
-there could not contribute a row. Dropping that scope is how a caller asks for
-the copies, and then their connections are read too.
+Of the shards a key names, only the **primary** is read. A replica cannot
+answer any read in this package: every per-shard copy of a query carries an
+unconditional `is_replica = false`, so a query sent to a replica comes back
+empty by construction. Pinning to the primary therefore loses nothing, and
+reading the copies would cost a round trip for a certainty.
 
 `sharding.pin_by_key` turns it off. Do that while rebalancing:
 `shards:rebalance` moves rows and updates slots without atomicity between the
