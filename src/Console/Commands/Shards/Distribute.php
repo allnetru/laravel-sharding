@@ -337,7 +337,9 @@ class Distribute extends Command
                     continue;
                 }
 
-                if ($this->carry($table, $rowKey, $attributes, $source, $placement)) {
+                $clash = $this->carry($table, $rowKey, $attributes, $source, $placement);
+
+                if ($clash === null) {
                     $moved++;
 
                     continue;
@@ -345,7 +347,7 @@ class Distribute extends Command
 
                 $collisions++;
                 $this->warn(
-                    "{$table}.{$rowKey} {$attributes[$rowKey]} is already taken on {$target} by a different row; "
+                    "{$table}.{$rowKey} {$attributes[$rowKey]} is held on {$clash} by a different row; "
                     . "the copy on {$source} is left where it is.",
                 );
             }
@@ -357,69 +359,112 @@ class Distribute extends Command
     /**
      * Carry one row from where it is to where its key says it belongs.
      *
-     * The target can already hold that primary key, and for three reasons that
-     * each need a different answer rather than a crash.
+     * **Where it belongs is the whole placement and not only its head.** The
+     * head is the primary, the tail names the connections this key's replicas
+     * belong on, and a run that creates the primary and stops reports success
+     * while the metadata goes on advertising replicas that hold nothing. These
+     * are raw table writes, so no `created` hook builds them afterwards. With
+     * three shards and one replica the source is frequently not one of the
+     * replica connections, so there is nothing left behind to demote either —
+     * the row has to be written there.
      *
-     * **A replica copy of the same row.** With replication on — and the
-     * default is one replica — the copy of a row frequently sits on exactly
-     * the connection the key names, which on two shards is every time. An
-     * unconditional insert then violates the primary key and takes the whole
-     * repair down with it. The copy is promoted instead: it is already the
-     * right bytes on the right shard, and all it lacks is being the primary.
-     *
-     * **A previous run interrupted between the write and the delete.** The
-     * documented recovery is to run the command again, and that only works if
-     * finding the row already there is a state rather than an error.
-     *
-     * **A different row that happens to share the identifier.** This is the
-     * one case where nothing may be thrown away. It is what adopting sharding
-     * over databases that counted their own identifiers looks like, and the
-     * two rows are both real data — so the primary key alone does not settle
-     * that the row on the target is the row in hand. The attributes have to
-     * agree as well, and when they do not the source copy stays where it is
-     * and the run reports it. A repair tool that silently drops one of two
-     * conflicting rows is worse than one that stops.
-     *
-     * **What happens to the source copy** is the second half of the answer,
-     * and deleting it is only right when the source holds nothing this key
-     * needs. With replicas configured the source is frequently one of the
-     * connections this key's replicas belong on — with one replica and two
-     * shards it always is — and these are raw table writes, so no `created`
-     * hook rebuilds what a delete removes. The metadata would go on
-     * advertising a replica that no longer exists. So a source that is a
-     * replica connection for this key keeps the row and is marked as the
-     * replica it should have been all along.
+     * **Nothing is overwritten before the rows are compared.** A connection
+     * can already hold that primary key for three reasons, and only the third
+     * is a refusal: a replica of this same row, this same row left by a run
+     * interrupted between the write and the delete, or a different row that
+     * happens to share the identifier. That last one is what adopting sharding
+     * over databases which counted their own identifiers looks like, and both
+     * rows are real data. What the occupant claims to be does not settle it —
+     * a replica marked as such can be the replica of that other row, and
+     * promoting it destroys a copy the metadata still promises. So the
+     * comparison comes first and applies to every occupant.
      *
      * @param string $table
      * @param string $rowKey The primary key.
      * @param array<string, mixed> $attributes The row as it is on the source.
      * @param string $source
      * @param list<string> $placement The connections this key belongs on, the primary first.
-     * @return bool Whether the row now lives where its key says it belongs.
+     * @return string|null The connection whose occupant is a different row, or null when the row arrived.
      */
-    protected function carry(string $table, string $rowKey, array $attributes, string $source, array $placement): bool
+    protected function carry(string $table, string $rowKey, array $attributes, string $source, array $placement): ?string
     {
         $target = $placement[0];
+        $replicas = array_slice($placement, 1);
         $id = $attributes[$rowKey] ?? null;
-        $existing = DB::connection($target)->table($table)->where($rowKey, $id)->first();
+
+        /*
+        | Written before it is removed, and deliberately in that order.
+        | Interrupted between the two this leaves the row on both connections,
+        | which the comparison corrects on a re-run. The other order loses the
+        | row.
+        */
+        if (!$this->place($table, $rowKey, $id, $attributes, $target, false)) {
+            return $target;
+        }
+
+        foreach ($replicas as $replica) {
+            /*
+            | The copy on the source becomes this replica rather than being
+            | written a second time — it is already the right bytes on the
+            | right connection.
+            */
+            if ($replica === $source) {
+                continue;
+            }
+
+            if (!$this->place($table, $rowKey, $id, $attributes, $replica, true)) {
+                return $replica;
+            }
+        }
+
+        $this->releaseSource($table, $rowKey, $id, $attributes, $source, $replicas);
+
+        return null;
+    }
+
+    /**
+     * Put the row on one connection, as the primary or as a replica.
+     *
+     * @param string $table
+     * @param string $rowKey
+     * @param mixed $id
+     * @param array<string, mixed> $attributes The row as it is on the source.
+     * @param string $connection
+     * @param bool $asReplica Whether this connection holds a copy rather than the row.
+     * @return bool Whether the connection now holds it; false when a different row is in the way.
+     */
+    protected function place(
+        string $table,
+        string $rowKey,
+        mixed $id,
+        array $attributes,
+        string $connection,
+        bool $asReplica,
+    ): bool {
+        $marks = array_key_exists('is_replica', $attributes);
+
+        // a table without the column cannot say which copy is the row, so it
+        // cannot hold replicas at all and there is nothing to write there
+        if ($asReplica && !$marks) {
+            return true;
+        }
+
+        $wanted = $marks ? array_merge($attributes, ['is_replica' => $asReplica]) : $attributes;
+        $existing = DB::connection($connection)->table($table)->where($rowKey, $id)->first();
 
         if ($existing === null) {
-            /*
-            | Written before it is removed, and deliberately in that order.
-            | Interrupted between the two this leaves the row on both shards,
-            | which the branch below corrects on a re-run. The other order
-            | loses the row.
-            */
-            DB::connection($target)->table($table)->insert($attributes);
-        } elseif (!empty(((array) $existing)['is_replica'])) {
-            DB::connection($target)->table($table)->where($rowKey, $id)->update(
-                array_merge($attributes, ['is_replica' => false]),
-            );
-        } elseif (!$this->sameRow((array) $existing, $attributes)) {
+            DB::connection($connection)->table($table)->insert($wanted);
+
+            return true;
+        }
+
+        if (!$this->sameRow((array) $existing, $attributes)) {
             return false;
         }
 
-        $this->releaseSource($table, $rowKey, $id, $attributes, $source, array_slice($placement, 1));
+        // already this row: the write settles which copy it is, and repeating
+        // it is what makes an interrupted run recoverable
+        DB::connection($connection)->table($table)->where($rowKey, $id)->update($wanted);
 
         return true;
     }

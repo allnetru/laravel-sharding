@@ -376,6 +376,89 @@ class ShardDistributeTest extends TestCase
     }
 
     /**
+     * A replica of a different row is not overwritten to make room.
+     *
+     * The promotion branch used to run before the comparison, so an occupant
+     * marked `is_replica` was overwritten whatever row it was a copy of — and
+     * the primary it belonged to went on being advertised as having one. What
+     * the occupant claims to be does not settle whose row it is. Found in
+     * review.
+     *
+     * @return void
+     */
+    public function testAReplicaOfADifferentRowIsNotOverwritten(): void
+    {
+        [$right, $wrong] = $this->shardsFor(1);
+
+        DB::connection($wrong)->table('holders')->insert(['id' => 1, 'name' => 'mine', 'is_replica' => false]);
+        DB::connection($right)->table('holders')->insert(['id' => 1, 'name' => 'somebody else', 'is_replica' => true]);
+
+        $this->artisan('shards:distribute', ['model' => [Holder::class]])->assertFailed();
+
+        $this->assertSame('mine', DB::connection($wrong)->table('holders')->where('id', 1)->value('name'));
+        $this->assertSame('somebody else', DB::connection($right)->table('holders')->where('id', 1)->value('name'));
+    }
+
+    /**
+     * The replicas a moved row is supposed to have are written too.
+     *
+     * With three shards the source is often not one of the key'"'"'s replica
+     * connections, so there is nothing left behind to demote and nothing else
+     * writes the copy either — the command reported success while the
+     * metadata advertised a replica holding nothing. Found in review.
+     *
+     * @return void
+     */
+    public function testTheReplicasOfAMovedRowAreWritten(): void
+    {
+        config([
+            'database.connections.shard_3' => ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => ''],
+            'sharding.connections' => [
+                'shard_1' => ['weight' => 1],
+                'shard_2' => ['weight' => 1],
+                'shard_3' => ['weight' => 1],
+            ],
+            'sharding.tables.holders.replica_count' => 1,
+        ]);
+
+        Schema::connection('shard_3')->create('holders', function (Blueprint $table): void {
+            $table->unsignedBigInteger('id')->primary();
+            $table->string('name')->nullable();
+            $table->boolean('is_replica')->default(false);
+        });
+
+        app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
+
+        $placement = app(ShardingManager::class)->connectionFor(new Holder(), 1);
+
+        $this->assertCount(2, $placement);
+
+        // the one connection this key names neither as its primary nor as its
+        // replica: from there the source cannot be demoted into the replica
+        $source = collect(['shard_1', 'shard_2', 'shard_3'])
+            ->reject(fn (string $name): bool => in_array($name, $placement, true))
+            ->first();
+
+        $this->assertNotNull($source, 'three shards and a placement of two should leave one over');
+
+        DB::connection($source)->table('holders')->insert(['id' => 1, 'name' => 'mine', 'is_replica' => false]);
+
+        $this->artisan('shards:distribute', ['model' => [Holder::class]])->assertSuccessful();
+
+        $primary = DB::connection($placement[0])->table('holders')->where('id', 1)->first();
+        $replica = DB::connection($placement[1])->table('holders')->where('id', 1)->first();
+
+        $this->assertNotNull($primary, 'the primary did not arrive');
+        $this->assertEmpty($primary->is_replica);
+        $this->assertNotNull($replica, 'the replica this key is advertised as having was never written');
+        $this->assertNotEmpty($replica->is_replica, 'the copy arrived claiming to be the row');
+        $this->assertNull(
+            DB::connection($source)->table('holders')->where('id', 1)->first(),
+            'the source kept a copy it is not a connection for',
+        );
+    }
+
+    /**
      * The shard a key names, and one it does not.
      *
      * @param int $key The shard key value.

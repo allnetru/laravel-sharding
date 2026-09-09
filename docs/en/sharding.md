@@ -99,7 +99,7 @@ public function rebalance(
     ?int $start,
     ?int $end,
     array $config,
-): void;
+): int;   // how many rows were moved
 ```
 
 One key could not serve both. On a colocated one-to-many table — several
