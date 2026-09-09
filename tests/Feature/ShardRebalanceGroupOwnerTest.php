@@ -2,6 +2,7 @@
 
 namespace Allnetru\Sharding\Tests\Feature;
 
+use Allnetru\Sharding\Models\Concerns\Shardable;
 use Allnetru\Sharding\ShardingManager;
 use Allnetru\Sharding\Strategies\Strategy;
 use Allnetru\Sharding\Tests\TestCase;
@@ -70,7 +71,7 @@ class ShardRebalanceGroupOwnerTest extends TestCase
      */
     public function testTheChildIsRebalancedUnderItsOwnersConfiguration(): void
     {
-        $this->artisan('shards:rebalance', ['model' => OwnedNote::class])->assertSuccessful();
+        $this->artisan('shards:rebalance', ['model' => [OwnedNote::class]])->assertSuccessful();
 
         $config = RecordingStrategy::$config;
 
@@ -134,7 +135,7 @@ class ShardRebalanceGroupOwnerTest extends TestCase
     {
         DB::connection('shard_1')->table('owners')->insert(['id' => 1, 'is_replica' => false]);
 
-        $this->artisan('shards:rebalance', ['model' => OwnedNote::class])->assertFailed();
+        $this->artisan('shards:rebalance', ['model' => [OwnedNote::class]])->assertFailed();
 
         $this->assertNull(RecordingStrategy::$config, 'the rebalance ran over a populated group');
     }
@@ -165,9 +166,27 @@ class ShardRebalanceGroupOwnerTest extends TestCase
 
         app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
 
-        $this->artisan('shards:rebalance', ['model' => OwnedNote::class])->assertFailed();
+        $this->artisan('shards:rebalance', ['model' => [OwnedNote::class]])->assertFailed();
 
         $this->assertNull(RecordingStrategy::$config, 'the rebalance ran against a schema it would die on');
+    }
+
+    /**
+     * The command refuses a target without bounds when the owner is a range.
+     *
+     * @return void
+     */
+    public function testTheCommandRefusesABoundlessTargetOnARangeStrategy(): void
+    {
+        config([
+            'sharding.tables.owners.strategy' => 'range',
+            'sharding.tables.owners.ranges' => [['start' => 1, 'end' => 100, 'connection' => 'shard_1']],
+        ]);
+        app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
+
+        $this->artisan('shards:rebalance', ['model' => [OwnedNote::class], '--to' => 'shard_2'])->assertFailed();
+
+        $this->assertCount(1, config('sharding.tables.owners.ranges'), 'a catch-all range was handed over');
     }
 
     /**
@@ -183,7 +202,7 @@ class ShardRebalanceGroupOwnerTest extends TestCase
      */
     public function testANonNumericRangeBoundIsRefused(): void
     {
-        $this->artisan('shards:rebalance', ['model' => OwnedNote::class, '--start' => 'tenant-a'])
+        $this->artisan('shards:rebalance', ['model' => [OwnedNote::class], '--start' => 'tenant-a'])
             ->assertFailed();
 
         $this->assertNull(RecordingStrategy::$config, 'the rebalance ran on a bound it could not express');
@@ -240,9 +259,7 @@ class RecordingStrategy implements Strategy
      * @param array<string, mixed> $config
      */
     public function rebalance(
-        string $table,
-        string $shardKey,
-        string $rowKey,
+        array $tables,
         ?string $from,
         ?string $to,
         ?int $start,
@@ -260,6 +277,8 @@ class RecordingStrategy implements Strategy
  */
 class OwnedNote extends Model
 {
+    use Shardable;
+
     protected $table = 'owned_notes';
 
     protected string $shardKey = 'owner_id';

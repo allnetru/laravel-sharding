@@ -87,26 +87,47 @@ Only strategies that support rebalancing can be used with the `shards:rebalance`
 is the trait that implements the move for you.
 
 **The `rebalance()` signature changed in 0.5.0 and a custom strategy has to
-follow it.** It now takes the shard key and the row key separately:
+follow it.** It takes every table of a colocation group at once, each with its
+own shard key and row key:
 
 ```php
+use Allnetru\Sharding\Support\ShardedTable;
+
 public function rebalance(
-    string $table,
-    string $shardKey,   // decides which connection a row belongs on
-    string $rowKey,     // identifies one row
+    array $tables,      // list<ShardedTable>: one per table of the group
     ?string $from,
     ?string $to,
     ?int $start,
     ?int $end,
-    array $config,
+    array $config,      // the group owner's, as ShardingManager::strategyFor() gives it
 ): int;   // how many rows were moved
+
+new ShardedTable(
+    table: 'user_roles',
+    shardKey: 'user_id',   // decides which connection a row belongs on
+    rowKey: 'id',          // identifies one row
+);
 ```
 
-One key could not serve both. On a colocated one-to-many table — several
-`user_roles` rows sharing one `user_id` — using the shard key for identity
-means `where('user_id', ...)->delete()` after moving a single row, which
-removes every other role that user has. Getting the routing wrong loses a
-row's location; getting the identity wrong loses the row.
+Two keys per table, because one could not serve both. On a colocated
+one-to-many table — several `user_roles` rows sharing one `user_id` — using
+the shard key for identity means `where('user_id', ...)->delete()` after moving
+a single row, which removes every other role that user has. Getting the routing
+wrong loses a row's location; getting the identity wrong loses the row.
+
+A list of tables, because the routing a rebalance hands over belongs to the
+group and not to a table: moving one table's rows and redirecting the key sends
+every sibling's reads to the new connection while their rows are still on the
+old one. `Rebalanceable` runs every pass across all the tables and changes the
+routing once, after all of them have arrived. `afterRebalance()` receives the
+group owner's table as its scope for the same reason.
+
+**An explicit `--to` is a routing change, and only a strategy that can express
+one may take it.** A row-aware strategy redirects each key. A range strategy
+hands a range over, so it needs both `--start` and `--end` — a range with
+neither bound is a catch-all that would send every key of the table to the
+target, including every key that never moved. A strategy that can do neither is
+refused an explicit target outright.
 
 **Replica copies are not moved.** A replica belongs on a replica connection
 rather than on the primary its key names, so the rule the walk applies is not
@@ -147,14 +168,14 @@ which chooses its replicas inside `afterRebalance()` and is not row-aware at
 all, and what makes a rerun repair a placement half-written by a database error
 even though the primary mapping is already correct.
 
-**A populated colocation group cannot be rebalanced one table at a time, and
-this command does one table**, so it refuses. The routing belongs to the group,
-so moving one table's rows and redirecting the key sends every sibling's reads
-to the new connection while their rows stay on the old one. A sibling with
-nothing in it has nothing to strand, so a group whose later tables are
-configured before they exist is still workable. Moving a whole group is the
-shape of work `shards:distribute` does, and it takes a model per table for
-exactly this reason.
+**A colocation group moves as one.** The routing belongs to the group, so
+moving one table's rows and redirecting the key would send every sibling's
+reads to the new connection while their rows stay on the old one. The command
+takes a model per table, refuses a populated table left unnamed, and the trait
+runs every pass across all the tables before the routing changes once. The
+partial-key check spans the group too: an owner on the connection being walked
+and one of its rows in another table on a connection that is not is a split,
+and it is refused before anything moves.
 
 **The keys whose routing is handed over are read off the data, not remembered.**
 Every configured connection is walked afterwards, and a key whose rows sit
@@ -213,14 +234,19 @@ A table may override the generator via the `id_generator` option in its configur
 3. Move rows with the rebalance command:
 
    ```bash
-   php artisan shards:rebalance "App\Models\Item" --from=shard-1 --to=shard-10
+   php artisan shards:rebalance "App\Models\User" "App\Models\UserRole" --from=shard-1 --to=shard-10
    ```
 
-   **The argument is the model class, not the table name.** The table name
-   alone cannot find the model on an application that keeps its models outside
-   `App\Models`, and only the model knows which column its own shard key lives
-   in — which for a colocated table is not the primary key. A short name is
-   still resolved against `App\Models` for anyone it worked for before.
+   **The arguments are model classes, one per table of the colocation group.**
+   A table name alone cannot find the model on an application that keeps its
+   models outside `App\Models`, and only the model knows which column its own
+   shard key lives in — which for a colocated table is not the primary key. A
+   short name is still resolved against `App\Models` for anyone it worked for
+   before.
+
+   Every populated table of the group has to be named: the routing being handed
+   over belongs to the group, so moving one table would strand the others
+   behind it. A sibling with nothing in it may be left out.
 
    Use `--start` and `--end` to limit the range. **They bound the shard key, not
    the primary key** — for a colocated table those are different columns, and

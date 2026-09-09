@@ -81,9 +81,7 @@ class HashStrategy implements Strategy
      * @inheritdoc
      */
     public function rebalance(
-        string $table,
-        string $shardKey,
-        string $rowKey,
+        array $tables,
         ?string $from,
         ?string $to,
         ?int $start,

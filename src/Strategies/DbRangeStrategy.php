@@ -31,10 +31,18 @@ class DbRangeStrategy implements Strategy, SupportsAfterRebalance
             throw new InvalidArgumentException('No table scope provided for sharding.');
         }
 
+        /*
+        | Newest first. A rebalance re-homes a sub-range of one that already
+        | exists, so two rows can contain the key — and without an order the
+        | driver picks one, which on the rebalance that just ran means the
+        | routing flipping between old and new by luck. The range written last
+        | is the one that was meant.
+        */
         $range = ShardRange::on($metaConnection)->from($rangeTable)
             ->where('table', $scope)
             ->where('start', '<=', $key)
             ->where('end', '>=', $key)
+            ->orderByDesc('id')
             ->first();
 
         if ($range) {
@@ -167,7 +175,7 @@ class DbRangeStrategy implements Strategy, SupportsAfterRebalance
     /**
      * Persist new range information after rebalancing.
      *
-     * @param string $table
+     * @param string $table The group owner's table, which is the scope the ranges are stored under.
      * @param string $shardKey The column a slot is computed from.
      * @param string|null $from
      * @param string|null $to
@@ -191,15 +199,27 @@ class DbRangeStrategy implements Strategy, SupportsAfterRebalance
         $index = array_search($to, $connections, true);
         $replicas = $this->buildReplicas($connections, $index, $config['replica_count'] ?? 0);
 
-        $range = new ShardRange([
-            'table' => $scope,
-            'start' => $start,
-            'end' => $end,
-            'connection' => $to,
-            'replicas' => $replicas,
-        ]);
-        $range->setConnection($metaConnection);
+        /*
+        | Updated when a row with this start exists, written otherwise. The
+        | table is unique on (table, start), so a plain insert made every rerun
+        | die on the index — and re-running is the documented recovery for an
+        | interrupted rebalance. It is also what a rebalance of a whole existing
+        | range means: that range now lives elsewhere.
+        */
+        $range = ShardRange::on($metaConnection)->from($rangeTable)
+            ->where('table', $scope)
+            ->where('start', $start)
+            ->first();
+
+        if ($range === null) {
+            $range = new ShardRange(['table' => $scope, 'start' => $start]);
+            $range->setConnection($metaConnection);
+        }
+
         $range->setTable($rangeTable);
+        $range->setAttribute('end', $end);
+        $range->setAttribute('connection', $to);
+        $range->setAttribute('replicas', $replicas);
         $range->save();
     }
 

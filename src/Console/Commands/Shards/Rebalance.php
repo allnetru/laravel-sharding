@@ -5,20 +5,30 @@ namespace Allnetru\Sharding\Console\Commands\Shards;
 use Allnetru\Sharding\Console\Commands\Shards\Concerns\ResolvesShardModel;
 use Allnetru\Sharding\Exceptions\RebalanceIncomplete;
 use Allnetru\Sharding\ShardingManager;
+use Allnetru\Sharding\Support\ShardedTable;
 use Illuminate\Console\Command;
+use InvalidArgumentException;
 
 /**
  * Move records between shard connections.
  *
- * **Takes the model class rather than the table name**, for the two reasons
- * `shards:distribute` takes it: the table name alone cannot find the model on
- * any application that keeps its models outside `App\Models` — this command
- * simply could not run there — and only the model knows which column its own
- * shard key lives in, which for a colocated table is not the primary key.
+ * **Takes model classes, one per table of the colocation group.** A model
+ * rather than a table name, for the two reasons `shards:distribute` takes it:
+ * the table name alone cannot find the model on any application that keeps
+ * its models outside `App\Models`, and only the model knows which column its
+ * own shard key lives in — which for a colocated table is not the primary key.
+ *
+ * Every populated table of the group, because the routing a rebalance hands
+ * over belongs to the group: moving one table's rows and redirecting the key
+ * sends every sibling's reads to the new connection while their rows are
+ * still on the old one. The tables move together and the routing changes
+ * once, after all of them have arrived. A sibling with nothing in it may be
+ * left out — it has nothing to strand — so a group whose later tables are
+ * configured before they exist is still workable.
  *
  * `--start` and `--end` bound the **shard key**, because that is what a slot
  * is a range of. On a table keyed by `user_id` a range picks users and moves
- * every row each of them has.
+ * every row each of them has, in every table of the group.
  */
 class Rebalance extends Command
 {
@@ -29,7 +39,7 @@ class Rebalance extends Command
      *
      * @var string
      */
-    protected $signature = 'shards:rebalance {model : The model class of the table to rebalance}
+    protected $signature = 'shards:rebalance {model* : The model classes of the tables to move, one per table of the group}
         {--from=}
         {--to=}
         {--start=}
@@ -40,7 +50,7 @@ class Rebalance extends Command
      *
      * @var string
      */
-    protected $description = 'Move data between shards';
+    protected $description = 'Move the rows of a colocation group between shards';
 
     /**
      * Execute the console command.
@@ -49,64 +59,10 @@ class Rebalance extends Command
      */
     public function handle(): int
     {
-        $model = $this->resolveModel((string) $this->argument('model'));
-
-        if (!$model) {
-            return self::FAILURE;
-        }
-
-        $table = $model->getTable();
         $manager = app(ShardingManager::class);
+        $tables = $this->tables($manager);
 
-        /*
-        | **A colocation group cannot be rebalanced one table at a time, and
-        | this command can only do one table.** The routing is the group's:
-        | `rowMoved()` and `afterRebalance()` write it under the group owner,
-        | so moving this table's rows and redirecting the key sends every
-        | sibling's reads to the new connection while their rows are still on
-        | the old one. Nothing is lost, and nothing reaches it either.
-        |
-        | Refused rather than half-done. Moving a whole group means moving
-        | every table's rows for those keys before the routing changes once,
-        | which is a different command from this one — `shards:distribute` does
-        | that shape of work and takes a model per table for exactly this
-        | reason. Until this command does too, a populated group is not
-        | something it may touch.
-        |
-        | A sibling with nothing in it has nothing to strand, so a group whose
-        | later tables are configured before they exist is still workable.
-        */
-        $siblings = $this->populatedGroupSiblings($manager, $table);
-
-        if ($siblings !== []) {
-            $this->error(
-                "{$table} is colocated with " . implode(', ', $siblings) . ', which hold rows. The routing '
-                . 'this would hand over belongs to the whole group, so their reads would follow it to the '
-                . 'new connection while their rows stayed behind. Rebalancing a populated group is not '
-                . 'something this command can do one table at a time.',
-            );
-
-            return self::FAILURE;
-        }
-
-        /*
-        | Every connection that routes has to have the table. Leaving one out
-        | of the scans does not leave it out of `connectionFor()`: the rows
-        | would move, the routing would be handed over, and the pass that makes
-        | the placement real would die on the missing table with the metadata
-        | already advertising a replica that cannot exist. A connection listed
-        | in DB_SHARD_MIGRATIONS is the exception, because nothing routes there
-        | while it is on that list.
-        */
-        $missing = $this->connectionsWithoutTable($manager, $table);
-
-        if ($missing !== []) {
-            $this->error(
-                'These connections route ' . $table . ' and have no such table: ' . implode(', ', $missing)
-                . '. Rows would be sent to them and the run would die partway. Migrate them first, or list '
-                . 'them in DB_SHARD_MIGRATIONS while they are being prepared.',
-            );
-
+        if ($tables === null) {
             return self::FAILURE;
         }
 
@@ -120,11 +76,11 @@ class Rebalance extends Command
         | colocated child table only declares its group: its own entry has no
         | strategy and no slot size, so reading it directly fell back to the
         | default strategy and wrote the slot metadata under the child's name.
-        | The rows moved and keyed reads went on being routed to the shard the
-        | metadata still named. `strategyFor()` resolves the group's owner,
-        | which is where both the strategy and the slots live.
+        | `strategyFor()` resolves the group's owner, which is where both the
+        | strategy and the routing live — and it answers the same for every
+        | table of the group, so the first one asks.
         */
-        [$strategy, $config] = $manager->strategyFor($table);
+        [$strategy, $config] = $manager->strategyFor($tables[0]->table);
 
         if (!$strategy->canRebalance()) {
             $this->error('Rebalancing is not supported for this strategy.');
@@ -133,38 +89,18 @@ class Rebalance extends Command
         }
 
         /*
-        | Two keys, and mixing them up costs different things. The shard key is
-        | what a slot is computed from, so it decides routing and the range;
-        | routing by the primary key instead moves rows the slot change never
-        | asked about and leaves the ones it did, after which the slot table
-        | says something untrue about where the data is.
-        |
-        | The row key is what identifies one row. On a colocated one-to-many
-        | table — several roles for one user — identifying by the shard key
-        | means deleting every one of that user's rows after moving one of
-        | them. Routing by the wrong key misplaces rows; identifying by the
-        | wrong key destroys them.
-        */
-        $shardKey = method_exists($model, 'getShardKey') ? $model->getShardKey() : $model->getKeyName();
-        $rowKey = $model->getKeyName();
-
-        /*
         | Refused rather than cast. A slot is a numeric range, and `--start`
         | and `--end` bound the shard key — so a model whose shard key is a
         | string has no range this command can express. Casting was the old
         | behaviour and it was silent: `--start=tenant-a` became 0, and the run
         | selected an unrelated set of rows, quite possibly all of them.
-        |
-        | The bounds only became reachable for a string key when they moved
-        | from the primary key onto the shard key, which is why this had never
-        | bitten before.
         */
         foreach (['start' => $start, 'end' => $end] as $option => $value) {
             if ($value !== null && !is_numeric($value)) {
                 $this->error(
-                    "--{$option} has to be a number: it bounds {$table}.{$shardKey}, and a slot is a "
-                    . 'numeric range. A string shard key has no range this command can express — move '
-                    . 'the rows with --from and --to instead.',
+                    "--{$option} has to be a number: it bounds {$tables[0]->table}.{$tables[0]->shardKey}, and a "
+                    . 'slot is a numeric range. A string shard key has no range this command can express — '
+                    . 'move the rows with --from and --to instead.',
                 );
 
                 return self::FAILURE;
@@ -173,21 +109,20 @@ class Rebalance extends Command
 
         try {
             $moved = $strategy->rebalance(
-                $table,
-                $shardKey,
-                $rowKey,
+                $tables,
                 $from,
                 $to,
                 $start !== null ? (int) $start : null,
                 $end !== null ? (int) $end : null,
                 $config,
             );
-        } catch (RebalanceIncomplete $e) {
+        } catch (RebalanceIncomplete|InvalidArgumentException $e) {
             /*
             | Caught rather than left to bubble, so the operator gets the
-            | sentence instead of a stack trace — but the status is a failure,
-            | because rows are still on the connection this run was meant to
-            | empty and the routing was deliberately not advanced.
+            | sentence instead of a stack trace — but the status is a failure:
+            | either rows are still on the connection this run was meant to
+            | empty and the routing was deliberately not advanced, or the run
+            | was refused before it started.
             */
             $this->error($e->getMessage());
 
@@ -197,5 +132,99 @@ class Rebalance extends Command
         $this->info("Moved {$moved} records.");
 
         return self::SUCCESS;
+    }
+
+    /**
+     * The tables to move, checked as a group before anything is read.
+     *
+     * Everything that can refuse the run is decided here, because a rebalance
+     * that fails halfway is the state it exists to prevent: every model
+     * resolves and is shardable, they all belong to one colocation group, no
+     * populated table of that group has been left out, and every connection
+     * that routes the group has every one of its tables.
+     *
+     * @param ShardingManager $manager
+     * @return list<ShardedTable>|null The tables, or null when something refused the run.
+     */
+    protected function tables(ShardingManager $manager): ?array
+    {
+        $tables = [];
+
+        foreach ((array) $this->argument('model') as $class) {
+            $model = $this->resolveModel((string) $class);
+
+            if (!$model) {
+                return null;
+            }
+
+            /*
+            | Asked of the manager and not only of the class: `method_exists`
+            | alone accepts any model that happens to have a domain method by
+            | that name, and this command rewrites where rows live.
+            */
+            if (!$manager->isShardable($model) || !method_exists($model, 'getShardKey')) {
+                $this->error($model::class . ' is not shardable: it does not use the Shardable trait.');
+
+                return null;
+            }
+
+            $tables[] = ShardedTable::of($model);
+        }
+
+        /*
+        | One group, because one routing. A table outside any group is a group
+        | of one and is named by its own table.
+        */
+        $groups = array_unique(array_map(
+            static fn (ShardedTable $table): string => $manager->groupFor($table->table) ?? $table->table,
+            $tables,
+        ));
+
+        if (count($groups) > 1) {
+            $this->error(
+                'These tables are not one colocation group: ' . implode(', ', $groups)
+                . '. A rebalance hands one routing over, so it moves one group at a time.',
+            );
+
+            return null;
+        }
+
+        $named = array_map(static fn (ShardedTable $table): string => $table->table, $tables);
+        $left = array_diff($this->populatedGroupSiblings($manager, $tables[0]->table), $named);
+
+        if ($left !== []) {
+            $this->error(
+                'Holding rows and part of the same colocation, but not named: ' . implode(', ', $left)
+                . '. The routing this would hand over belongs to the whole group, so their reads would '
+                . 'follow it to the new connection while their rows stayed behind. Pass their models too.',
+            );
+
+            return null;
+        }
+
+        /*
+        | Every connection that routes has to have every table. Leaving one
+        | out of the scans does not leave it out of `connectionFor()`: the rows
+        | would move, the routing would be handed over, and the pass that makes
+        | the placement real would die on the missing table with the metadata
+        | already advertising a replica that cannot exist. A connection listed
+        | in DB_SHARD_MIGRATIONS is the exception, because nothing routes there
+        | while it is on that list.
+        */
+        foreach ($tables as $table) {
+            $missing = $this->connectionsWithoutTable($manager, $table->table);
+
+            if ($missing !== []) {
+                $this->error(
+                    "These connections route {$table->table} and have no such table: " . implode(', ', $missing)
+                    . '. Rows would be sent to them and the run would die partway. Migrate them first, or '
+                    . 'list them in DB_SHARD_MIGRATIONS while they are being prepared.',
+                );
+
+                return null;
+            }
+        }
+
+        return $tables;
     }
 }

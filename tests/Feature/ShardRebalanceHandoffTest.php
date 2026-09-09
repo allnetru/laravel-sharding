@@ -8,6 +8,7 @@ use Allnetru\Sharding\Strategies\Rebalanceable;
 use Allnetru\Sharding\Strategies\RowMoveAware;
 use Allnetru\Sharding\Strategies\Strategy;
 use Allnetru\Sharding\Strategies\SupportsAfterRebalance;
+use Allnetru\Sharding\Support\ShardedTable;
 use Allnetru\Sharding\Tests\TestCase;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
@@ -86,7 +87,7 @@ class ShardRebalanceHandoffTest extends TestCase
 
         // moved onto a connection this key names neither as primary nor as
         // replica, so the strategy has to choose a new replica for it
-        $this->strategy()->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_3', null, null, [
+        $this->strategy()->rebalance([new ShardedTable('grants', 'user_id', 'id')], 'shard_1', 'shard_3', null, null, [
             'connections' => config('sharding.connections'),
             'table' => 'grants',
             'replica_count' => 1,
@@ -134,7 +135,7 @@ class ShardRebalanceHandoffTest extends TestCase
         ]);
 
         try {
-            $this->strategy()->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_3', null, null, [
+            $this->strategy()->rebalance([new ShardedTable('grants', 'user_id', 'id')], 'shard_1', 'shard_3', null, null, [
                 'connections' => config('sharding.connections'),
                 'table' => 'grants',
                 'replica_count' => 1,
@@ -170,7 +171,7 @@ class ShardRebalanceHandoffTest extends TestCase
         $strategy->refuseToRedirect = true;
 
         try {
-            $strategy->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_3', null, null, [
+            $strategy->rebalance([new ShardedTable('grants', 'user_id', 'id')], 'shard_1', 'shard_3', null, null, [
                 'connections' => config('sharding.connections'),
                 'table' => 'grants',
                 'replica_count' => 1,
@@ -204,7 +205,7 @@ class ShardRebalanceHandoffTest extends TestCase
 
         $strategy = $this->strategy();
 
-        $strategy->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_3', null, null, [
+        $strategy->rebalance([new ShardedTable('grants', 'user_id', 'id')], 'shard_1', 'shard_3', null, null, [
             'connections' => config('sharding.connections'),
             'table' => 'grants',
             'replica_count' => 1,
@@ -237,7 +238,7 @@ class ShardRebalanceHandoffTest extends TestCase
         $first->refuseToRedirect = true;
 
         try {
-            $first->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_3', null, null, [
+            $first->rebalance([new ShardedTable('grants', 'user_id', 'id')], 'shard_1', 'shard_3', null, null, [
                 'connections' => config('sharding.connections'),
                 'table' => 'grants',
                 'replica_count' => 1,
@@ -262,7 +263,7 @@ class ShardRebalanceHandoffTest extends TestCase
         // the same command again, with the store reachable this time
         $second = $this->strategy();
 
-        $second->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_3', null, null, [
+        $second->rebalance([new ShardedTable('grants', 'user_id', 'id')], 'shard_1', 'shard_3', null, null, [
             'connections' => config('sharding.connections'),
             'table' => 'grants',
             'replica_count' => 1,
@@ -305,7 +306,7 @@ class ShardRebalanceHandoffTest extends TestCase
         ]);
 
         // moved onto the connection its own replica lives on
-        $this->strategy()->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_2', null, null, [
+        $this->strategy()->rebalance([new ShardedTable('grants', 'user_id', 'id')], 'shard_1', 'shard_2', null, null, [
             'connections' => config('sharding.connections'),
             'table' => 'grants',
             'replica_count' => 1,
@@ -344,7 +345,7 @@ class ShardRebalanceHandoffTest extends TestCase
         // only SupportsAfterRebalance, the shape both range strategies have
         $strategy = app(RangingStrategy::class);
 
-        $strategy->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_3', null, null, [
+        $strategy->rebalance([new ShardedTable('grants', 'user_id', 'id')], 'shard_1', 'shard_3', 1, 100, [
             'connections' => config('sharding.connections'),
             'table' => 'grants',
             'replica_count' => 1,
@@ -378,7 +379,7 @@ class ShardRebalanceHandoffTest extends TestCase
             'is_replica' => false,
         ]);
 
-        $this->strategy()->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_3', null, null, [
+        $this->strategy()->rebalance([new ShardedTable('grants', 'user_id', 'id')], 'shard_1', 'shard_3', null, null, [
             'connections' => config('sharding.connections'),
             'table' => 'grants',
             'replica_count' => 1,
@@ -390,7 +391,7 @@ class ShardRebalanceHandoffTest extends TestCase
         // and the routing is already right, so nothing needs redirecting
         $this->assertSame(['shard_3', 'shard_2'], MappedStrategy::$map['7']);
 
-        $this->strategy()->rebalance('grants', 'user_id', 'id', null, null, null, null, [
+        $this->strategy()->rebalance([new ShardedTable('grants', 'user_id', 'id')], null, null, null, null, [
             'connections' => config('sharding.connections'),
             'table' => 'grants',
             'replica_count' => 1,

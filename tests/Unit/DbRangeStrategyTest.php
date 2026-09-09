@@ -128,6 +128,44 @@ class DbRangeStrategyTest extends TestCase
         $this->assertSame(1, ShardRange::count());
     }
 
+    /**
+     * Handing the same range over twice updates the row it wrote.
+     *
+     * The table is unique on (table, start), so a plain insert made every rerun
+     * of a rebalance die on the index — and re-running is the documented
+     * recovery for an interrupted one.
+     */
+    public function testAfterRebalanceUpdatesTheRangeItWroteBefore(): void
+    {
+        $config = $this->baseConfig();
+        $strategy = new DbRangeStrategy();
+
+        $strategy->afterRebalance('orders', 'id', null, 'shard_b', 2001, 3000, $config);
+        $strategy->afterRebalance('orders', 'id', null, 'shard_c', 2001, 3000, $config);
+
+        $this->assertSame(1, ShardRange::count(), 'the rerun wrote a second row for the same start');
+        $this->assertSame('shard_c', ShardRange::where('start', 2001)->firstOrFail()->connection);
+    }
+
+    /**
+     * Of two ranges containing a key, the one written last decides.
+     *
+     * A rebalance re-homes a sub-range of one that already exists, so both
+     * contain the key — and without an order the driver picked one, which
+     * meant the routing flipping between old and new by luck.
+     */
+    public function testTheNewestOverlappingRangeWins(): void
+    {
+        $config = $this->baseConfig();
+        $strategy = new DbRangeStrategy();
+
+        $strategy->recordMeta(500, ['shard_a'], $config);
+        $strategy->afterRebalance('orders', 'id', null, 'shard_b', 501, 1000, $config);
+
+        $this->assertSame('shard_b', $strategy->determine(750, $config)[0], 'the range being replaced still decides');
+        $this->assertSame('shard_a', $strategy->determine(250, $config)[0], 'the untouched half of the old range moved too');
+    }
+
     public function testCanRebalance(): void
     {
         $this->assertTrue((new DbRangeStrategy())->canRebalance());

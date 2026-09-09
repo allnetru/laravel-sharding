@@ -3,6 +3,7 @@
 namespace Allnetru\Sharding\Tests\Unit;
 
 use Allnetru\Sharding\Strategies\HashStrategy;
+use Allnetru\Sharding\Support\ShardedTable;
 use Allnetru\Sharding\Tests\TestCase;
 
 class HashStrategyTest extends TestCase
@@ -57,7 +58,7 @@ class HashStrategyTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('Rebalancing is not supported for hash strategy.');
 
-        $strategy->rebalance('table', 'id', 'id', null, null, null, null, [
+        $strategy->rebalance([new ShardedTable('table', 'id', 'id')], null, null, null, null, [
             'connections' => ['a' => ['weight' => 1]],
         ]);
     }

@@ -4,6 +4,7 @@ namespace Allnetru\Sharding\Tests\Feature;
 
 use Allnetru\Sharding\ShardingManager;
 use Allnetru\Sharding\Strategies\RangeStrategy;
+use Allnetru\Sharding\Support\ShardedTable;
 use Allnetru\Sharding\Tests\TestCase;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
@@ -75,7 +76,7 @@ class ShardRebalanceRangeTest extends TestCase
             'is_replica' => false,
         ]);
 
-        app(RangeStrategy::class)->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_3', 1, 100, [
+        app(RangeStrategy::class)->rebalance([new ShardedTable('grants', 'user_id', 'id')], 'shard_1', 'shard_3', 1, 100, [
             'connections' => config('sharding.connections'),
             'table' => 'grants',
             'replica_count' => 1,
@@ -111,6 +112,82 @@ class ShardRebalanceRangeTest extends TestCase
             0,
             DB::connection('shard_2')->table('grants')->count(),
             'a copy was placed for the routing as it was before the handoff',
+        );
+    }
+
+    /**
+     * A target without bounds is refused for a range strategy.
+     *
+     * A range strategy hands routing over as a range, and a range with neither
+     * bound is a catch-all. Put in front of the others it would send every key
+     * of the table to the target — including every key that never moved.
+     * Refused before any row moves.
+     *
+     * @return void
+     */
+    public function testATargetWithoutBoundsIsRefused(): void
+    {
+        DB::connection('shard_1')->table('grants')->insert([
+            'id' => 1,
+            'user_id' => 7,
+            'role' => 'one',
+            'is_replica' => false,
+        ]);
+
+        try {
+            app(RangeStrategy::class)->rebalance([new ShardedTable('grants', 'user_id', 'id')], 'shard_1', 'shard_3', null, null, [
+                'connections' => config('sharding.connections'),
+                'table' => 'grants',
+                'replica_count' => 1,
+                'ranges' => config('sharding.tables.grants.ranges'),
+            ]);
+
+            $this->fail('a catch-all range was handed over');
+        } catch (\InvalidArgumentException) {
+            // refused, as it should be
+        }
+
+        $this->assertSame(1, DB::connection('shard_1')->table('grants')->count(), 'rows moved before the refusal');
+        $this->assertSame(
+            [['start' => 1, 'end' => 100, 'connection' => 'shard_1']],
+            config('sharding.tables.grants.ranges'),
+            'the routing was touched',
+        );
+    }
+
+    /**
+     * Running the same rebalance again leaves the ranges as they were.
+     *
+     * Re-running is the documented recovery for an interrupted rebalance, and
+     * it used to stack a copy of the handed-over range per attempt.
+     *
+     * @return void
+     */
+    public function testARerunDoesNotStackTheRange(): void
+    {
+        DB::connection('shard_1')->table('grants')->insert([
+            'id' => 1,
+            'user_id' => 7,
+            'role' => 'one',
+            'is_replica' => false,
+        ]);
+
+        foreach ([1, 2] as $attempt) {
+            app(RangeStrategy::class)->rebalance([new ShardedTable('grants', 'user_id', 'id')], 'shard_1', 'shard_3', 1, 100, [
+                'connections' => config('sharding.connections'),
+                'table' => 'grants',
+                'replica_count' => 1,
+                'ranges' => config('sharding.tables.grants.ranges'),
+            ]);
+        }
+
+        $this->assertSame(
+            [
+                ['start' => 1, 'end' => 100, 'connection' => 'shard_3'],
+                ['start' => 1, 'end' => 100, 'connection' => 'shard_1'],
+            ],
+            config('sharding.tables.grants.ranges'),
+            'the rerun stacked another copy of the range',
         );
     }
 }

@@ -3,10 +3,12 @@
 namespace Allnetru\Sharding\Tests\Feature;
 
 use Allnetru\Sharding\Exceptions\RebalanceIncomplete;
+use Allnetru\Sharding\Models\Concerns\Shardable;
 use Allnetru\Sharding\ShardingManager;
 use Allnetru\Sharding\Strategies\Rebalanceable;
 use Allnetru\Sharding\Strategies\Strategy;
 use Allnetru\Sharding\Strategies\SupportsAfterRebalance;
+use Allnetru\Sharding\Support\ShardedTable;
 use Allnetru\Sharding\Tests\TestCase;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Schema\Blueprint;
@@ -74,7 +76,7 @@ class ShardRebalanceKeysTest extends TestCase
             ]);
         }
 
-        $moved = $this->strategy()->rebalance('grants', 'user_id', 'id', $source, null, null, null, [
+        $moved = $this->strategy()->rebalance([new ShardedTable('grants', 'user_id', 'id')], $source, null, null, null, [
             'connections' => config('sharding.connections'),
             'table' => 'grants',
         ]);
@@ -132,7 +134,7 @@ class ShardRebalanceKeysTest extends TestCase
         $strategy = $this->strategy();
 
         try {
-            $strategy->rebalance('grants', 'user_id', 'id', $source, null, null, null, [
+            $strategy->rebalance([new ShardedTable('grants', 'user_id', 'id')], $source, null, null, null, [
                 'connections' => config('sharding.connections'),
                 'table' => 'grants',
             ]);
@@ -182,7 +184,7 @@ class ShardRebalanceKeysTest extends TestCase
         DB::connection($source)->table('grants')->insert($row);
         DB::connection($target)->table('grants')->insert($row);
 
-        $moved = $this->strategy()->rebalance('grants', 'user_id', 'id', $source, null, null, null, [
+        $moved = $this->strategy()->rebalance([new ShardedTable('grants', 'user_id', 'id')], $source, null, null, null, [
             'connections' => config('sharding.connections'),
             'table' => 'grants',
         ]);
@@ -229,7 +231,7 @@ class ShardRebalanceKeysTest extends TestCase
             'is_replica' => false,
         ]);
 
-        $this->artisan('shards:rebalance', ['model' => Grant::class, '--from' => $source])
+        $this->artisan('shards:rebalance', ['model' => [Grant::class], '--from' => $source])
             ->assertFailed();
     }
 
@@ -262,7 +264,7 @@ class ShardRebalanceKeysTest extends TestCase
         ]);
 
         try {
-            $this->strategy()->rebalance('grants', 'user_id', 'id', $source, null, null, null, [
+            $this->strategy()->rebalance([new ShardedTable('grants', 'user_id', 'id')], $source, null, null, null, [
                 'connections' => config('sharding.connections'),
                 'table' => 'grants',
             ]);
@@ -321,7 +323,7 @@ class ShardRebalanceKeysTest extends TestCase
         ]);
 
         try {
-            $this->strategy()->rebalance('grants', 'user_id', 'id', null, 'shard_3', null, null, [
+            $this->strategy()->rebalance([new ShardedTable('grants', 'user_id', 'id')], null, 'shard_3', 1, 100, [
                 'connections' => config('sharding.connections'),
                 'table' => 'grants',
             ]);
@@ -396,7 +398,7 @@ class ShardRebalanceKeysTest extends TestCase
         DB::connection($primary)->table('grants')->insert($row);
         DB::connection($replica)->table('grants')->insert(array_merge($row, ['is_replica' => true]));
 
-        $moved = $this->strategy()->rebalance('grants', 'user_id', 'id', null, null, null, null, [
+        $moved = $this->strategy()->rebalance([new ShardedTable('grants', 'user_id', 'id')], null, null, null, null, [
             'connections' => config('sharding.connections'),
             'table' => 'grants',
             'replica_count' => 1,
@@ -431,7 +433,7 @@ class ShardRebalanceKeysTest extends TestCase
         DB::connection($source)->table('grants')->insert($row);
         DB::connection($target)->table('grants')->insert($row);
 
-        $moved = $this->strategy()->rebalance('grants', 'user_id', 'id', null, null, null, null, [
+        $moved = $this->strategy()->rebalance([new ShardedTable('grants', 'user_id', 'id')], null, null, null, null, [
             'connections' => config('sharding.connections'),
             'table' => 'grants',
         ]);
@@ -494,7 +496,7 @@ class ShardRebalanceKeysTest extends TestCase
         ]);
 
         try {
-            $this->strategy()->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_3', null, null, [
+            $this->strategy()->rebalance([new ShardedTable('grants', 'user_id', 'id')], 'shard_1', 'shard_3', 1, 100, [
                 'connections' => config('sharding.connections'),
                 'table' => 'grants',
             ]);
@@ -545,7 +547,7 @@ class ShardRebalanceKeysTest extends TestCase
             'is_replica' => false,
         ]);
 
-        $moved = $this->strategy()->rebalance('grants', 'user_id', 'id', $source, null, null, null, [
+        $moved = $this->strategy()->rebalance([new ShardedTable('grants', 'user_id', 'id')], $source, null, null, null, [
             'connections' => config('sharding.connections'),
             'table' => 'grants',
         ]);
@@ -578,7 +580,7 @@ class ShardRebalanceKeysTest extends TestCase
         DB::connection($other)->table('grants')->insert($row);
 
         try {
-            $this->strategy()->rebalance('grants', 'user_id', 'id', $target, null, null, null, [
+            $this->strategy()->rebalance([new ShardedTable('grants', 'user_id', 'id')], $target, null, null, null, [
                 'connections' => config('sharding.connections'),
                 'table' => 'grants',
             ]);
@@ -590,6 +592,35 @@ class ShardRebalanceKeysTest extends TestCase
 
         $this->assertSame(1, DB::connection($target)->table('grants')->count());
         $this->assertSame(1, DB::connection($other)->table('grants')->count());
+    }
+
+    /**
+     * A strategy that cannot hand routing over refuses an explicit target.
+     *
+     * `--to` is a routing change. A strategy that is neither row-aware nor
+     * range-shaped has no way to express one, so it would move the rows and
+     * leave the routing naming the connection they left — unreachable, and
+     * nothing a rerun could do about it.
+     *
+     * @return void
+     */
+    public function testAnExplicitTargetIsRefusedWhereNothingCanHandTheRoutingOver(): void
+    {
+        DB::connection('shard_1')->table('grants')->insert([
+            'id' => 1,
+            'user_id' => 1,
+            'role' => 'one',
+            'is_replica' => false,
+        ]);
+
+        $this->expectException(\InvalidArgumentException::class);
+
+        // neither RowMoveAware nor SupportsAfterRebalance — and with both bounds
+        // given, so the only refusal left to trigger is this one
+        (new GrantsStrategy())->rebalance([new ShardedTable('grants', 'user_id', 'id')], 'shard_1', 'shard_2', 1, 100, [
+            'connections' => config('sharding.connections'),
+            'table' => 'grants',
+        ]);
     }
 
     /**
@@ -643,6 +674,8 @@ class ShardRebalanceKeysTest extends TestCase
  */
 class Grant extends Model
 {
+    use Shardable;
+
     protected $table = 'grants';
 
     protected string $shardKey = 'user_id';
