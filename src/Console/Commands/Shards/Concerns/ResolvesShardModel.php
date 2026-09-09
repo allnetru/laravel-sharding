@@ -2,7 +2,10 @@
 
 namespace Allnetru\Sharding\Console\Commands\Shards\Concerns;
 
+use Allnetru\Sharding\ShardingManager;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * Turning a command argument into the model that answers for a table.
@@ -22,6 +25,68 @@ use Illuminate\Database\Eloquent\Model;
  */
 trait ResolvesShardModel
 {
+    /**
+     * The tables of this table's colocation group that hold rows.
+     *
+     * Both commands need it, and for the same reason: the tables of a group
+     * share the value that decides their shard, so a routing change made for
+     * one of them applies to all of them. A table with nothing in it has
+     * nothing to strand, which is what lets a group whose later tables are
+     * configured before they exist be worked on at all.
+     *
+     * @param ShardingManager $manager
+     * @param string $table The table being worked on.
+     * @return list<string> The others, in configuration order.
+     */
+    protected function populatedGroupSiblings(ShardingManager $manager, string $table): array
+    {
+        $group = $manager->groupFor($table);
+
+        if ($group === null) {
+            return [];
+        }
+
+        $siblings = [];
+
+        foreach ((array) config("sharding.groups.{$group}") as $sibling) {
+            if ($sibling === $table) {
+                continue;
+            }
+
+            if ($this->holdsRows($manager, (string) $sibling)) {
+                $siblings[] = (string) $sibling;
+            }
+        }
+
+        return $siblings;
+    }
+
+    /**
+     * Whether a table exists and holds anything, anywhere.
+     *
+     * Asked of the manager rather than of `sharding.connections`, because a
+     * group owner may name its own connection list — and a table whose rows
+     * live only there reads as empty against the global one.
+     *
+     * @param ShardingManager $manager
+     * @param string $table
+     * @return bool
+     */
+    protected function holdsRows(ShardingManager $manager, string $table): bool
+    {
+        foreach (array_keys((array) $manager->connectionsFor($table)) as $connection) {
+            if (!Schema::connection($connection)->hasTable($table)) {
+                continue;
+            }
+
+            if (DB::connection($connection)->table($table)->limit(1)->exists()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /**
      * Resolve a model instance from the given class name.
      *

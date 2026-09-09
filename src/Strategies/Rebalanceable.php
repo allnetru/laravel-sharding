@@ -116,18 +116,8 @@ trait Rebalanceable
         $moved = 0;
         $failed = 0;
 
-        /*
-        | Which keys ended up where, applied only once the whole run is
-        | through. `rowMoved()` redirects a key, and on a colocated
-        | one-to-many table one key covers several rows: redirecting it after
-        | the first of them points the routing away from the siblings still on
-        | the source. Deduplicated by key, so this holds distinct keys rather
-        | than rows.
-        */
-        $redirects = [];
-
         foreach ($connections as $connection) {
-            $this->walkRows($table, $shardKey, $rowKey, $connection, $start, $end, $chunk, function ($row) use ($manager, $table, $shardKey, $rowKey, $connection, $to, &$moved, &$failed, &$redirects): void {
+            $this->walkRows($table, $shardKey, $rowKey, $connection, $start, $end, $chunk, function ($row) use ($manager, $table, $shardKey, $rowKey, $connection, $to, &$moved, &$failed): void {
                 $targetConnections = $this->placementFor($manager, $table, $shardKey, $to, $row);
                 $target = $targetConnections[0];
 
@@ -192,9 +182,6 @@ trait Rebalanceable
                     $targetConn->commit();
                     $sourceConn->commit();
 
-                    // the slot is the shard key's, not the row's
-                    $redirects[(string) $row->$shardKey] = [$row->$shardKey, $target];
-
                     $moved++;
                 } catch (\Throwable $e) {
                     $targetConn->rollBack();
@@ -220,7 +207,21 @@ trait Rebalanceable
         | range handed over while any row is, is what makes rows unreachable.
         */
         if ($failed === 0) {
-            $failed += $this->handOverRouting($manager, $table, $shardKey, $rowKey, $redirects, $config);
+            [$redirects, $split] = $this->redirectsFromWhereRowsAre(
+                $manager,
+                $table,
+                $shardKey,
+                $rowKey,
+                $start,
+                $end,
+                $chunk,
+            );
+
+            $failed += $split;
+
+            if ($failed === 0) {
+                $failed += $this->handOverRouting($manager, $table, $shardKey, $rowKey, $redirects, $config);
+            }
 
             if ($failed === 0 && $this instanceof SupportsAfterRebalance) {
                 $this->afterRebalance($table, $shardKey, $from, $to, $start, $end, $config);
@@ -250,6 +251,83 @@ trait Rebalanceable
         }
 
         return $moved;
+    }
+
+    /**
+     * Which keys the routing is wrong about, read off the data itself.
+     *
+     * **Derived rather than remembered, and that is what makes a rerun
+     * finish the job.** This used to be the set of rows the run had moved,
+     * which is a record of what happened rather than of what is true: a
+     * transient failure partway through the move, or a `rowMoved()` that
+     * threw, left rows on the new connection with the routing naming the old
+     * one — and a rerun, seeing nothing left to move on the source, had an
+     * empty set and reported success over keys still pointing at the wrong
+     * shard.
+     *
+     * Read off the data there is no such gap. Every configured connection is
+     * walked, not only the source: a key whose rows sit somewhere the routing
+     * does not name needs redirecting, whoever moved them and whenever. So the
+     * recovery for an interrupted rebalance is to run it again, and it works
+     * even when the interruption was in the handoff itself.
+     *
+     * A key whose rows are spread over more than one connection is not
+     * decided: it is counted as a failure and named in the log, because
+     * choosing either connection would strand the rows on the other.
+     *
+     * @param ShardingManager $manager
+     * @param string $table
+     * @param string $shardKey
+     * @param string $rowKey
+     * @param int|null $start
+     * @param int|null $end
+     * @param int $chunk
+     * @return array{0: array<string, array{0: mixed, 1: string}>, 1: int}
+     */
+    protected function redirectsFromWhereRowsAre(
+        ShardingManager $manager,
+        string $table,
+        string $shardKey,
+        string $rowKey,
+        ?int $start,
+        ?int $end,
+        int $chunk,
+    ): array {
+        $where = [];
+
+        foreach (array_keys((array) $manager->connectionsFor($table)) as $connection) {
+            $this->walkRows($table, $shardKey, $rowKey, $connection, $start, $end, $chunk, function ($row) use ($shardKey, $connection, &$where): void {
+                $where[(string) $row->$shardKey][$connection] = $row->$shardKey;
+            });
+        }
+
+        $redirects = [];
+        $split = 0;
+
+        foreach ($where as $key => $connections) {
+            if (count($connections) > 1) {
+                Log::error('A key has rows on more than one connection, so its routing cannot be decided', [
+                    'table' => $table,
+                    'shard_key' => $key,
+                    'connections' => array_keys($connections),
+                ]);
+
+                $split++;
+
+                continue;
+            }
+
+            $connection = (string) array_key_first($connections);
+            $value = reset($connections);
+
+            if (($manager->connectionFor($table, $value)[0] ?? null) === $connection) {
+                continue;
+            }
+
+            $redirects[$key] = [$value, $connection];
+        }
+
+        return [$redirects, $split];
     }
 
     /**
@@ -370,9 +448,26 @@ trait Rebalanceable
             }
 
             foreach ($replicas as $replica) {
-                $copy = DB::connection($replica)->table($table)->where($rowKey, $row->$rowKey);
+                $occupant = DB::connection($replica)->table($table)->where($rowKey, $row->$rowKey)->first();
 
-                if ($copy->exists()) {
+                if ($occupant !== null) {
+                    /*
+                    | Existence is not identity. The connection the strategy
+                    | picked can already hold a different row under this
+                    | identifier — neither earlier pass looks here, since the
+                    | primary preflight inspects the primary and the shared-key
+                    | check deliberately leaves replicas out — and accepting it
+                    | would leave the routing advertising somebody else's row
+                    | as this one's copy.
+                    */
+                    if (!RowComparison::same((array) $occupant, $attributes)) {
+                        Log::error('Refused to place a replica over a different row with the same key', [
+                            'table' => $table,
+                            'id' => $row->$rowKey,
+                            'connection' => $replica,
+                        ]);
+                    }
+
                     continue;
                 }
 
@@ -438,7 +533,7 @@ trait Rebalanceable
             $page = [];
 
             $this->walkRows($table, $shardKey, $rowKey, $connection, $start, $end, $chunk, function ($row) use ($table, $rowKey, $others, $chunk, &$page, &$shared): void {
-                $page[] = $row->$rowKey;
+                $page[(string) $row->$rowKey] = (array) $row;
 
                 if (count($page) >= $chunk) {
                     $shared += $this->countShared($table, $rowKey, $others, $page);
@@ -462,26 +557,43 @@ trait Rebalanceable
     }
 
     /**
-     * How many of these keys the other connections hold as primaries.
+     * How many of these rows another connection holds as a *different* row.
+     *
+     * The identifier alone is not the answer. An interruption between the two
+     * commits leaves the same row, byte for byte, as a primary on both
+     * connections — the state the move pass accepts and resolves by releasing
+     * the source — so counting every shared key refused a rerun of exactly the
+     * run that needs one. The payloads decide, the same way they decide
+     * everywhere else here.
      *
      * @param string $table
      * @param string $rowKey
      * @param list<string> $others
-     * @param list<mixed> $keys
+     * @param array<string, array<string, mixed>> $rows The page, by row key.
      * @return int
      */
-    protected function countShared(string $table, string $rowKey, array $others, array $keys): int
+    protected function countShared(string $table, string $rowKey, array $others, array $rows): int
     {
         $shared = 0;
 
         foreach ($others as $other) {
-            $shared += DB::connection($other)
+            $found = DB::connection($other)
                 ->table($table)
-                ->whereIn($rowKey, $keys)
+                ->whereIn($rowKey, array_keys($rows))
                 ->where(function ($query): void {
                     $query->where('is_replica', false)->orWhereNull('is_replica');
                 })
-                ->count();
+                ->get();
+
+            foreach ($found as $row) {
+                $mine = $rows[(string) $row->$rowKey] ?? null;
+
+                if ($mine === null || RowComparison::same((array) $row, $mine)) {
+                    continue;
+                }
+
+                $shared++;
+            }
         }
 
         return $shared;

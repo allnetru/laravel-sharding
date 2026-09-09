@@ -56,6 +56,39 @@ class Rebalance extends Command
         }
 
         $table = $model->getTable();
+        $manager = app(ShardingManager::class);
+
+        /*
+        | **A colocation group cannot be rebalanced one table at a time, and
+        | this command can only do one table.** The routing is the group's:
+        | `rowMoved()` and `afterRebalance()` write it under the group owner,
+        | so moving this table's rows and redirecting the key sends every
+        | sibling's reads to the new connection while their rows are still on
+        | the old one. Nothing is lost, and nothing reaches it either.
+        |
+        | Refused rather than half-done. Moving a whole group means moving
+        | every table's rows for those keys before the routing changes once,
+        | which is a different command from this one — `shards:distribute` does
+        | that shape of work and takes a model per table for exactly this
+        | reason. Until this command does too, a populated group is not
+        | something it may touch.
+        |
+        | A sibling with nothing in it has nothing to strand, so a group whose
+        | later tables are configured before they exist is still workable.
+        */
+        $siblings = $this->populatedGroupSiblings($manager, $table);
+
+        if ($siblings !== []) {
+            $this->error(
+                "{$table} is colocated with " . implode(', ', $siblings) . ', which hold rows. The routing '
+                . 'this would hand over belongs to the whole group, so their reads would follow it to the '
+                . 'new connection while their rows stayed behind. Rebalancing a populated group is not '
+                . 'something this command can do one table at a time.',
+            );
+
+            return self::FAILURE;
+        }
+
         $from = $this->option('from');
         $to = $this->option('to');
         $start = $this->option('start');
@@ -70,7 +103,7 @@ class Rebalance extends Command
         | metadata still named. `strategyFor()` resolves the group's owner,
         | which is where both the strategy and the slots live.
         */
-        [$strategy, $config] = app(ShardingManager::class)->strategyFor($table);
+        [$strategy, $config] = $manager->strategyFor($table);
 
         if (!$strategy->canRebalance()) {
             $this->error('Rebalancing is not supported for this strategy.');

@@ -7,6 +7,7 @@ use Allnetru\Sharding\Strategies\Strategy;
 use Allnetru\Sharding\Tests\TestCase;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -52,6 +53,11 @@ class ShardRebalanceGroupOwnerTest extends TestCase
             Schema::connection($connection)->create('owned_notes', function (Blueprint $table): void {
                 $table->unsignedBigInteger('id')->primary();
                 $table->unsignedBigInteger('owner_id');
+                $table->boolean('is_replica')->default(false);
+            });
+
+            Schema::connection($connection)->create('owners', function (Blueprint $table): void {
+                $table->unsignedBigInteger('id')->primary();
                 $table->boolean('is_replica')->default(false);
             });
         }
@@ -111,6 +117,26 @@ class ShardRebalanceGroupOwnerTest extends TestCase
             (array) config('sharding.tables.owned_notes.ranges', []),
             'the range was written under the child, where nothing reads it',
         );
+    }
+
+    /**
+     * A populated colocation group is not rebalanced one table at a time.
+     *
+     * The routing belongs to the group: `rowMoved()` and `afterRebalance()`
+     * write it under the owner, so moving this table's rows and redirecting
+     * the key sends every sibling's reads to the new connection while their
+     * rows stay on the old one. Nothing is lost and nothing reaches it either.
+     * Refused rather than half-done. Found in review.
+     *
+     * @return void
+     */
+    public function testAPopulatedColocationGroupIsRefused(): void
+    {
+        DB::connection('shard_1')->table('owners')->insert(['id' => 1, 'is_replica' => false]);
+
+        $this->artisan('shards:rebalance', ['model' => OwnedNote::class])->assertFailed();
+
+        $this->assertNull(RecordingStrategy::$config, 'the rebalance ran over a populated group');
     }
 
     /**

@@ -356,33 +356,6 @@ class Distribute extends Command
     }
 
     /**
-     * Whether a table exists and holds anything, anywhere.
-     *
-     * Asked of the manager rather than of `sharding.connections`, because a
-     * group owner may name its own connection list — and a table whose rows
-     * live only there was declared empty by the global list, which let a
-     * partial group sweep through.
-     *
-     * @param ShardingManager $manager
-     * @param string $table
-     * @return bool
-     */
-    protected function holdsRows(ShardingManager $manager, string $table): bool
-    {
-        foreach (array_keys((array) $manager->connectionsFor($table)) as $connection) {
-            if (!Schema::connection($connection)->hasTable($table)) {
-                continue;
-            }
-
-            if (DB::connection($connection)->table($table)->limit(1)->exists()) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
      * Walk one table on one connection, moving what does not belong there.
      *
      * Paged by the primary key rather than by offset, because the rows being

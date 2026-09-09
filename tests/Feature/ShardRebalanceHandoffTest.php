@@ -106,6 +106,47 @@ class ShardRebalanceHandoffTest extends TestCase
     }
 
     /**
+     * A different row already on the new replica connection is not overwritten.
+     *
+     * Neither earlier pass looks there: the preflight inspects the primary
+     * destination, and the shared-key check leaves replicas out on purpose. So
+     * an existence-only test accepted somebody else's row as this one's copy.
+     * Found in review.
+     *
+     * @return void
+     */
+    public function testADifferentRowOnTheNewReplicaIsNotOverwritten(): void
+    {
+        DB::connection('shard_1')->table('grants')->insert([
+            'id' => 1,
+            'user_id' => 7,
+            'role' => 'mine',
+            'is_replica' => false,
+        ]);
+
+        // the connection the strategy will choose as the replica, already
+        // holding a copy of some other row under the same identifier
+        DB::connection('shard_2')->table('grants')->insert([
+            'id' => 1,
+            'user_id' => 99,
+            'role' => 'somebody else',
+            'is_replica' => true,
+        ]);
+
+        $this->strategy()->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_3', null, null, [
+            'connections' => config('sharding.connections'),
+            'table' => 'grants',
+            'replica_count' => 1,
+        ]);
+
+        $this->assertSame(
+            'somebody else',
+            DB::connection('shard_2')->table('grants')->where('id', 1)->value('role'),
+            'a different row was overwritten to make a replica',
+        );
+    }
+
+    /**
      * A routing update that throws is reported, not swallowed.
      *
      * @return void
@@ -136,6 +177,96 @@ class ShardRebalanceHandoffTest extends TestCase
 
         $this->assertFalse($strategy->handedOver, 'the range was handed over anyway');
         $this->assertSame(2, $strategy->attempts, 'the update was not retried');
+    }
+
+    /**
+     * A key is redirected once, after every row behind it has arrived.
+     *
+     * `rowMoved()` was called per row, and one key covers several rows on a
+     * colocated one-to-many table: redirecting it when the first lands points
+     * the routing away from the siblings still on the source. Found in review.
+     *
+     * @return void
+     */
+    public function testAKeyIsRedirectedOnceAndOnlyAfterEveryRowArrives(): void
+    {
+        DB::connection('shard_1')->table('grants')->insert([
+            ['id' => 1, 'user_id' => 7, 'role' => 'first', 'is_replica' => false],
+            ['id' => 2, 'user_id' => 7, 'role' => 'second', 'is_replica' => false],
+            ['id' => 3, 'user_id' => 7, 'role' => 'third', 'is_replica' => false],
+        ]);
+
+        $strategy = $this->strategy();
+
+        $strategy->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_3', null, null, [
+            'connections' => config('sharding.connections'),
+            'table' => 'grants',
+            'replica_count' => 1,
+        ]);
+
+        $this->assertSame(1, $strategy->attempts, 'the key was redirected per row rather than once');
+        $this->assertSame(['7' => ['shard_3', 'shard_2']], MappedStrategy::$map);
+    }
+
+    /**
+     * Running it again finishes a handoff that failed the first time.
+     *
+     * The redirect set used to be a record of what this run moved, so a rerun
+     * that found nothing left on the source had nothing to redirect and
+     * reported success over keys still naming the old shard. Read off where
+     * the rows actually are, there is no such gap. Found in review.
+     *
+     * @return void
+     */
+    public function testRunningItAgainFinishesAHandoffThatFailed(): void
+    {
+        DB::connection('shard_1')->table('grants')->insert([
+            'id' => 1,
+            'user_id' => 7,
+            'role' => 'one',
+            'is_replica' => false,
+        ]);
+
+        $first = $this->strategy();
+        $first->refuseToRedirect = true;
+
+        try {
+            $first->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_3', null, null, [
+                'connections' => config('sharding.connections'),
+                'table' => 'grants',
+                'replica_count' => 1,
+            ]);
+        } catch (RebalanceIncomplete) {
+            // the state this test is about: the row moved, the routing did not
+        }
+
+        $this->assertSame([], MappedStrategy::$map, 'the routing was updated after all');
+        $this->assertSame(
+            1,
+            DB::connection('shard_3')->table('grants')->where('id', 1)->count(),
+            'the row did not move',
+        );
+        // the source keeps its copy as the replica this key still names it
+        // for, which is the retention rule rather than a failure to release
+        $left = DB::connection('shard_1')->table('grants')->where('id', 1)->first();
+
+        $this->assertNotNull($left);
+        $this->assertNotEmpty($left->is_replica, 'the source is still claiming to be the row');
+
+        // the same command again, with the store reachable this time
+        $second = $this->strategy();
+
+        $second->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_3', null, null, [
+            'connections' => config('sharding.connections'),
+            'table' => 'grants',
+            'replica_count' => 1,
+        ]);
+
+        $this->assertSame(
+            ['7' => ['shard_3', 'shard_2']],
+            MappedStrategy::$map,
+            'the rerun did not finish the handoff',
+        );
     }
 
     /**

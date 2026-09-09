@@ -131,7 +131,22 @@ connection the move never wrote to — an explicit `--to` outside the key's old
 placement — the metadata used to advertise a replica holding nothing. The copies
 are put there now.
 
-**The handoff is the one step a re-run cannot repeat.** Everything before it is
+**A populated colocation group cannot be rebalanced one table at a time, and
+this command does one table**, so it refuses. The routing belongs to the group,
+so moving one table's rows and redirecting the key sends every sibling's reads
+to the new connection while their rows stay on the old one. A sibling with
+nothing in it has nothing to strand, so a group whose later tables are
+configured before they exist is still workable. Moving a whole group is the
+shape of work `shards:distribute` does, and it takes a model per table for
+exactly this reason.
+
+**The keys whose routing is handed over are read off the data, not remembered.**
+Every configured connection is walked afterwards, and a key whose rows sit
+somewhere the routing does not name is redirected — whoever moved them and
+whenever. So re-running an interrupted rebalance finishes it, including when the
+interruption was in the handoff itself. A key whose rows are spread over more
+than one connection is not decided: it is a failure, because choosing either
+connection would strand the rows on the other. Everything before it is
 idempotent: a row already on the shard its key names is skipped, a destination
 already holding this row is accepted. By the handoff the source copies are gone,
 so a `rowMoved()` that throws — a Redis or metadata-database outage in that
