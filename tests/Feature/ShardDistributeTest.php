@@ -475,6 +475,58 @@ class ShardDistributeTest extends TestCase
     }
 
     /**
+     * An omitted group table that holds rows stops the run before it starts.
+     *
+     * This was a warning printed after the sweeps had already run, and the
+     * command exited successfully. The tables of a group share the value that
+     * decides their shard, so moving the parent while a child stays behind
+     * points that shared key at the new connection — and the child's rows,
+     * still on the old one, stop being found by a keyed read. Found in review.
+     *
+     * @return void
+     */
+    public function testAnOmittedGroupTableHoldingRowsStopsTheRun(): void
+    {
+        [, $wrong] = $this->shardsFor(1);
+
+        DB::connection($wrong)->table('holders')->insert(['id' => 1, 'is_replica' => false]);
+        DB::connection($wrong)->table('holder_notes')->insert([
+            'id' => 1,
+            'holder_id' => 1,
+            'is_replica' => false,
+        ]);
+
+        // only the parent, while the child of the same group holds rows
+        $this->artisan('shards:distribute', ['model' => [Holder::class]])->assertFailed();
+
+        $this->assertSame(
+            1,
+            DB::connection($wrong)->table('holders')->count(),
+            'the parent was swept before the omitted child was noticed',
+        );
+    }
+
+    /**
+     * An omitted group table with nothing in it is allowed through.
+     *
+     * The ordinary case of a group whose later tables are configured before
+     * they exist — a schema is written ahead of the code that fills it — and
+     * an empty table has nothing to strand.
+     *
+     * @return void
+     */
+    public function testAnOmittedGroupTableWithNothingInItIsAllowed(): void
+    {
+        [$right, $wrong] = $this->shardsFor(1);
+
+        DB::connection($wrong)->table('holders')->insert(['id' => 1, 'is_replica' => false]);
+
+        $this->artisan('shards:distribute', ['model' => [Holder::class]])->assertSuccessful();
+
+        $this->assertSame(1, DB::connection($right)->table('holders')->count());
+    }
+
+    /**
      * An active shard without the table stops the run before it starts.
      *
      * Leaving such a connection out of the sources does not stop the routing

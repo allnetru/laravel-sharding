@@ -108,11 +108,28 @@ means `where('user_id', ...)->delete()` after moving a single row, which
 removes every other role that user has. Getting the routing wrong loses a
 row's location; getting the identity wrong loses the row.
 
+`rowMoved()` is called once per distinct shard key, after the whole run, and
+not per row: on a colocated one-to-many table one key covers several rows, so
+redirecting it when the first one lands points the routing away from the
+siblings still on the source.
+
+**Run a rebalance with `SHARDING_PIN_BY_KEY=false`.** A pinned read finds a row
+only where its key currently says it is, and for the length of the move that is
+not where every row is. Unpinned, a read fans out and finds a row wherever it
+happens to be — which is what makes both the move itself and a re-run after an
+interrupted one safe.
+
 The range bounds `--start` and `--end` apply to the shard key, and paging,
 existence checks, updates and deletes to the row key.
 
+**A rebalance is two passes, and the first one writes nothing.** It reads every
+row that would move and refuses the whole run if any destination is occupied by
+a different row — the failure it can predict, and the common one. So a clash
+never leaves half the range moved.
+
 **A run that leaves any row behind raises `RebalanceIncomplete` rather than
-returning a count**, and skips `afterRebalance()`. That hook is where a range
+returning a count**, and skips both metadata steps — `rowMoved()` and
+`afterRebalance()`. That hook is where a range
 strategy hands the range over to the new connection, and doing it while rows
 are still on the old one is exactly what makes them unreachable: the routing
 names one shard, the data is on another, and retiring the old one loses it. The

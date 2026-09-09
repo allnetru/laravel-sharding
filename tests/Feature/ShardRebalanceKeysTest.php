@@ -5,6 +5,7 @@ namespace Allnetru\Sharding\Tests\Feature;
 use Allnetru\Sharding\Exceptions\RebalanceIncomplete;
 use Allnetru\Sharding\ShardingManager;
 use Allnetru\Sharding\Strategies\Rebalanceable;
+use Allnetru\Sharding\Strategies\RowMoveAware;
 use Allnetru\Sharding\Strategies\Strategy;
 use Allnetru\Sharding\Strategies\SupportsAfterRebalance;
 use Allnetru\Sharding\Tests\TestCase;
@@ -234,17 +235,106 @@ class ShardRebalanceKeysTest extends TestCase
     }
 
     /**
+     * A clash anywhere in the range means nothing moves at all.
+     *
+     * Withholding the range handoff protects the rows left behind and strands
+     * every row committed before the clash: the old range still routes keyed
+     * reads to the source, which those rows have left. There is no right
+     * choice after the fact, so the choice is removed — the first pass reads
+     * every row that would move and refuses the whole run. Found in review.
+     *
+     * @return void
+     */
+    public function testAClashAnywhereInTheRangeMovesNothing(): void
+    {
+        $target = app(ShardingManager::class)->connectionFor('grants', 1)[0];
+        $source = $target === 'shard_1' ? 'shard_2' : 'shard_1';
+
+        // two rows of one user: the first would move cleanly, the second clashes
+        DB::connection($source)->table('grants')->insert([
+            ['id' => 1, 'user_id' => 1, 'role' => 'first', 'is_replica' => false],
+            ['id' => 2, 'user_id' => 1, 'role' => 'second', 'is_replica' => false],
+        ]);
+        DB::connection($target)->table('grants')->insert([
+            'id' => 2,
+            'user_id' => 99,
+            'role' => 'somebody else',
+            'is_replica' => false,
+        ]);
+
+        try {
+            $this->strategy()->rebalance('grants', 'user_id', 'id', $source, null, null, null, [
+                'connections' => config('sharding.connections'),
+                'table' => 'grants',
+            ]);
+
+            $this->fail('the run went ahead over a row it could not move');
+        } catch (RebalanceIncomplete $e) {
+            $this->assertSame(0, $e->moved, 'rows were moved before the clash was found');
+        }
+
+        $this->assertSame(
+            ['first', 'second'],
+            DB::connection($source)->table('grants')->orderBy('id')->pluck('role')->all(),
+            'a row was carried off before the run was refused',
+        );
+    }
+
+    /**
+     * A key is redirected once, after every row behind it has arrived.
+     *
+     * `rowMoved()` was called per row. On a colocated one-to-many table one
+     * key covers several rows, so redirecting it when the first one lands
+     * points the routing away from the siblings still on the source — and a
+     * later refusal left it pointing there. Found in review.
+     *
+     * @return void
+     */
+    public function testAKeyIsRedirectedOnceAndOnlyAfterEveryRowArrives(): void
+    {
+        $target = app(ShardingManager::class)->connectionFor('grants', 1)[0];
+        $source = $target === 'shard_1' ? 'shard_2' : 'shard_1';
+
+        DB::connection($source)->table('grants')->insert([
+            ['id' => 1, 'user_id' => 1, 'role' => 'first', 'is_replica' => false],
+            ['id' => 2, 'user_id' => 1, 'role' => 'second', 'is_replica' => false],
+            ['id' => 3, 'user_id' => 1, 'role' => 'third', 'is_replica' => false],
+        ]);
+
+        $strategy = $this->strategy();
+
+        $strategy->rebalance('grants', 'user_id', 'id', $source, null, null, null, [
+            'connections' => config('sharding.connections'),
+            'table' => 'grants',
+        ]);
+
+        $this->assertSame(
+            [['1', $target]],
+            $strategy->redirected,
+            'the key was redirected per row rather than once for all of them',
+        );
+    }
+
+    /**
      * A strategy using the trait, routing through the manager.
      *
      * @return Strategy
      */
     protected function strategy(): Strategy
     {
-        return new class() implements Strategy, SupportsAfterRebalance {
+        return new class() implements Strategy, SupportsAfterRebalance, RowMoveAware {
             use Rebalanceable;
 
             /** Whether the routing was handed over to the new connection. */
             public bool $handedOver = false;
+
+            /** @var list<array{0: string, 1: string}> Every key redirect, in order. */
+            public array $redirected = [];
+
+            public function rowMoved(int|string $key, string $connection, array $config): void
+            {
+                $this->redirected[] = [(string) $key, $connection];
+            }
 
             public function afterRebalance(
                 string $table,

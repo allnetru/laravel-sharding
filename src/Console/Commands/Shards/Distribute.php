@@ -85,16 +85,8 @@ class Distribute extends Command
         $moved = 0;
         $misplaced = 0;
         $collisions = 0;
-        $swept = [];
-        $groups = [];
 
         foreach ($plan as $step) {
-            $swept[$step['table']] = true;
-
-            if ($step['group'] !== null) {
-                $groups[$step['group']] = true;
-            }
-
             $this->info("Sweeping {$step['table']} by {$step['key']}...");
 
             foreach ($step['sources'] as $source) {
@@ -113,8 +105,6 @@ class Distribute extends Command
                 $collisions += $clashed;
             }
         }
-
-        $this->reportTablesLeft($groups, $swept);
 
         if ($dryRun) {
             $this->info("Rows not on the shard their key names: {$misplaced}.");
@@ -268,40 +258,99 @@ class Distribute extends Command
             ];
         }
 
-        return $plan;
+        return $this->groupsAreWhole($plan) ? $plan : null;
     }
 
     /**
-     * Name the tables of the groups touched that nobody asked to sweep.
+     * Whether every table of every group touched is being swept.
      *
-     * A group swept in part is the state this command exists to leave behind
-     * nowhere: colocation only pays if every table of the group agrees about
-     * where a key lives.
+     * **A group swept in part is worse than one not swept at all**, and this
+     * used to be a warning printed after the sweeps had already run. The
+     * tables of a group share the value that decides their shard, so moving
+     * the parent while a child stays behind points that shared key at the new
+     * connection — and the child's rows, still on the old one, stop being
+     * found by a keyed read. They are not lost, but nothing reaches them until
+     * somebody works out why.
      *
-     * @param array<string, bool> $groups The groups the given models belong to.
-     * @param array<string, bool> $swept The tables actually swept.
-     * @return void
+     * A table nobody asked for is allowed through on one condition: it has
+     * nothing to strand. That covers the ordinary case of a group whose later
+     * tables are configured before they exist — a schema is written ahead of
+     * the code that fills it — without letting a real omission past.
+     *
+     * @param list<array{table: string, key: string, rowKey: string, group: string|null, sources: list<string>}> $plan
+     * @return bool
      */
-    protected function reportTablesLeft(array $groups, array $swept): void
+    protected function groupsAreWhole(array $plan): bool
     {
+        $swept = [];
+        $groups = [];
+
+        foreach ($plan as $step) {
+            $swept[$step['table']] = true;
+
+            if ($step['group'] !== null) {
+                $groups[$step['group']] = true;
+            }
+        }
+
         $left = [];
+        $empty = [];
 
         foreach (array_keys($groups) as $group) {
             foreach ((array) config("sharding.groups.{$group}") as $table) {
-                if (!isset($swept[$table])) {
+                if (isset($swept[$table]) || isset($left[$table]) || isset($empty[$table])) {
+                    continue;
+                }
+
+                if ($this->holdsRows($table)) {
                     $left[$table] = true;
+                } else {
+                    $empty[$table] = true;
                 }
             }
         }
 
-        if ($left === []) {
-            return;
+        if ($empty !== []) {
+            $this->line(
+                'Part of the same colocation and empty everywhere, so nothing to sweep: '
+                . implode(', ', array_keys($empty)) . '.',
+            );
         }
 
-        $this->warn(
-            'Not swept, and part of the same colocation: ' . implode(', ', array_keys($left))
-            . '. Pass their models too — the column their key lives in is theirs to name.',
+        if ($left === []) {
+            return true;
+        }
+
+        $this->error(
+            'Holding rows and part of the same colocation, but nobody asked to sweep them: '
+            . implode(', ', array_keys($left))
+            . '. Moving the rest would point their shared key at the new shard while these rows stay on '
+            . 'the old one, and a keyed read would stop finding them. Pass their models too — the column '
+            . 'their key lives in is theirs to name.',
         );
+
+        return false;
+    }
+
+    /**
+     * Whether a table exists and holds anything, anywhere.
+     *
+     * @param string $table
+     * @return bool
+     */
+    protected function holdsRows(string $table): bool
+    {
+        foreach (array_keys((array) config('sharding.connections', [])) as $connection) {
+            if (!Schema::connection($connection)->hasTable($table)) {
+                continue;
+            }
+
+            if (DB::connection($connection)->table($table)->limit(1)->exists()) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
