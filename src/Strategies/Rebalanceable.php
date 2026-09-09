@@ -220,11 +220,28 @@ trait Rebalanceable
             $failed += $split;
 
             if ($failed === 0) {
-                $failed += $this->handOverRouting($manager, $table, $shardKey, $rowKey, $redirects, $config);
+                $failed += $this->handOverRouting($table, $redirects, $config);
             }
 
             if ($failed === 0 && $this instanceof SupportsAfterRebalance) {
                 $this->afterRebalance($table, $shardKey, $from, $to, $start, $end, $config);
+            }
+
+            /*
+            | Last, because until both metadata steps are done the routing has
+            | not finished saying where the copies belong — a range strategy
+            | chooses the replicas of a moved key inside `afterRebalance()`.
+            */
+            if ($failed === 0) {
+                $failed += $this->materialisePlacements(
+                    $manager,
+                    $table,
+                    $shardKey,
+                    $rowKey,
+                    $start,
+                    $end,
+                    $chunk,
+                );
             }
         }
 
@@ -351,27 +368,16 @@ trait Rebalanceable
      * failure, which stops `afterRebalance()` and raises
      * `RebalanceIncomplete`.
      *
-     * Then the placement is materialised. The strategy decides what the
-     * replicas of a moved key become — `RedisStrategy` and
-     * `DbHashRangeStrategy` promote the old primary when the target used to be
-     * one of its replicas, and derive a fresh list from the connection order
-     * when it was not — and in the second case nothing in the move had written
-     * the row there. The metadata advertised a replica holding nothing. So
-     * once the routing says where the copies belong, they are put there.
+     * Making the placement the routing now names real is a pass of its own,
+     * `materialisePlacements()`, and deliberately not part of this loop.
      *
-     * @param ShardingManager $manager
      * @param string $table
-     * @param string $shardKey
-     * @param string $rowKey
      * @param array<string, array{0: mixed, 1: string}> $redirects
      * @param array<string, mixed> $config
      * @return int How many keys were left unredirected.
      */
     protected function handOverRouting(
-        ShardingManager $manager,
         string $table,
-        string $shardKey,
-        string $rowKey,
         array $redirects,
         array $config,
     ): int {
@@ -400,82 +406,130 @@ trait Rebalanceable
                     continue;
                 }
             }
-
-            $this->materialise($manager, $table, $shardKey, $rowKey, $key, $target);
         }
 
         return $stranded;
     }
 
     /**
-     * Put a copy of the key's rows on every connection its placement names.
+     * Make the copies of every key match what the routing now says.
+     *
+     * **A pass of its own, over the range, and not a step inside the
+     * redirect loop.** Four separate review findings came out of it being
+     * that, and they were all the same mistake: what has to be true afterwards
+     * is a property of the data, so checking it against the list of keys this
+     * run happened to redirect is checking the wrong thing.
+     *
+     * Being a pass fixes all four at once. It runs for a strategy that is not
+     * `RowMoveAware` — a range strategy chooses the replicas of a moved key
+     * inside `afterRebalance()`, and nothing had written them. It runs whether
+     * or not a redirect happened, so a rerun repairs a placement that a
+     * database error left half-written even though the primary mapping is
+     * already correct. And it has somewhere to put a failure, which the loop
+     * did not: a collision was logged and the run still reported success.
+     *
+     * What it makes true, for every primary row in the range: each connection
+     * the placement names holds a copy of the row, marked as a replica. An
+     * absent copy is written, an identical one left alone, and a **different**
+     * row under that identifier left exactly where it is and counted as a
+     * failure — it is somebody's data, and the routing is meanwhile
+     * advertising it as this row's copy.
+     *
+     * Copies on connections the placement does not name are not this pass's
+     * business: a primary row somewhere the routing does not name is what
+     * `redirectsFromWhereRowsAre()` decides about, and it has already refused
+     * the run if it could not.
      *
      * @param ShardingManager $manager
      * @param string $table
      * @param string $shardKey
      * @param string $rowKey
-     * @param mixed $key
-     * @param string $primary
-     * @return void
+     * @param int|null $start
+     * @param int|null $end
+     * @param int $chunk
+     * @return int How many copies could not be placed.
      */
-    protected function materialise(
+    protected function materialisePlacements(
         ShardingManager $manager,
         string $table,
         string $shardKey,
         string $rowKey,
-        mixed $key,
-        string $primary,
-    ): void {
-        $replicas = array_slice(array_values((array) $manager->connectionFor($table, $key)), 1);
+        ?int $start,
+        ?int $end,
+        int $chunk,
+    ): int {
+        $failed = 0;
 
-        if ($replicas === []) {
-            return;
-        }
+        foreach (array_keys((array) $manager->connectionsFor($table)) as $connection) {
+            $this->walkRows($table, $shardKey, $rowKey, $connection, $start, $end, $chunk, function ($row) use ($manager, $table, $shardKey, $rowKey, &$failed): void {
+                $attributes = (array) $row;
 
-        $rows = DB::connection($primary)->table($table)->where($shardKey, $key)->get();
-
-        foreach ($rows as $row) {
-            $attributes = (array) $row;
-
-            // a table without the column cannot say which copy is the row, so
-            // it cannot hold replicas at all
-            if (!array_key_exists('is_replica', $attributes)) {
-                return;
-            }
-
-            if (!empty($attributes['is_replica'])) {
-                continue;
-            }
-
-            foreach ($replicas as $replica) {
-                $occupant = DB::connection($replica)->table($table)->where($rowKey, $row->$rowKey)->first();
-
-                if ($occupant !== null) {
-                    /*
-                    | Existence is not identity. The connection the strategy
-                    | picked can already hold a different row under this
-                    | identifier — neither earlier pass looks here, since the
-                    | primary preflight inspects the primary and the shared-key
-                    | check deliberately leaves replicas out — and accepting it
-                    | would leave the routing advertising somebody else's row
-                    | as this one's copy.
-                    */
-                    if (!RowComparison::same((array) $occupant, $attributes)) {
-                        Log::error('Refused to place a replica over a different row with the same key', [
-                            'table' => $table,
-                            'id' => $row->$rowKey,
-                            'connection' => $replica,
-                        ]);
-                    }
-
-                    continue;
+                // a table without the column cannot say which copy is the row,
+                // so it cannot hold replicas at all
+                if (!array_key_exists('is_replica', $attributes)) {
+                    return;
                 }
 
-                DB::connection($replica)->table($table)->insert(
-                    array_merge($attributes, ['is_replica' => true]),
+                $replicas = array_slice(
+                    array_values((array) $manager->connectionFor($table, $row->$shardKey)),
+                    1,
                 );
-            }
+
+                foreach ($replicas as $replica) {
+                    $failed += $this->placeReplica($table, $rowKey, $attributes, $row->$rowKey, $replica);
+                }
+            });
         }
+
+        return $failed;
+    }
+
+    /**
+     * Put one copy on one connection the placement names.
+     *
+     * @param string $table
+     * @param string $rowKey
+     * @param array<string, mixed> $attributes The row as its primary holds it.
+     * @param mixed $id
+     * @param string $replica
+     * @return int 1 when a different row is in the way, 0 otherwise.
+     */
+    protected function placeReplica(
+        string $table,
+        string $rowKey,
+        array $attributes,
+        mixed $id,
+        string $replica,
+    ): int {
+        $occupant = DB::connection($replica)->table($table)->where($rowKey, $id)->first();
+
+        if ($occupant === null) {
+            DB::connection($replica)->table($table)->insert(
+                array_merge($attributes, ['is_replica' => true]),
+            );
+
+            return 0;
+        }
+
+        if (!RowComparison::same((array) $occupant, $attributes)) {
+            Log::error('A different row holds the identifier on a connection this key names as a replica', [
+                'table' => $table,
+                'id' => $id,
+                'connection' => $replica,
+            ]);
+
+            return 1;
+        }
+
+        /*
+        | An identical occupant is this row's copy and is left alone. It cannot
+        | be one claiming to be the primary: two primaries of one key mean two
+        | connections hold it, which `redirectsFromWhereRowsAre()` calls a
+        | split and refuses before this pass runs. Written down rather than
+        | guarded against, because a guard for a state the run cannot be in is
+        | code nobody can ever delete.
+        */
+        return 0;
     }
 
     /**

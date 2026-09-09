@@ -445,48 +445,40 @@ class ShardRebalanceKeysTest extends TestCase
     }
 
     /**
-     * With an explicit target, the connections the key names keep their copy.
+     * A key whose rows are primaries on two connections is not decided.
      *
-     * `placementFor()` answers with the explicit target alone, so the
-     * retention rule derived from it deleted the old primary — while the
-     * strategy's own `rowMoved()` promotes that primary into the replica list,
-     * leaving metadata advertising a replica on a connection the row had just
-     * been deleted from. Found in review.
+     * Choosing either connection strands the rows on the other, so it is a
+     * failure rather than a guess. This is also what makes the placement pass
+     * simple: it never has to meet an occupant claiming to be the primary,
+     * because that state is refused here first.
      *
      * @return void
      */
-    public function testWithAnExplicitTargetTheOldPrimaryBecomesTheReplica(): void
+    public function testAKeyWithPrimariesOnTwoConnectionsIsNotDecided(): void
     {
-        config(['sharding.tables.grants.replica_count' => 1]);
-        app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
+        $target = app(ShardingManager::class)->connectionFor('grants', 1)[0];
+        $other = $target === 'shard_1' ? 'shard_2' : 'shard_1';
 
-        $placement = app(ShardingManager::class)->connectionFor('grants', 1);
+        // the same row on both, and a --from that only walks one of them, so
+        // the move pass cannot resolve it the way a plain rerun would
+        $row = ['id' => 1, 'user_id' => 1, 'role' => 'one', 'is_replica' => false];
 
-        $this->assertCount(2, $placement, 'the replica was not configured');
+        DB::connection($target)->table('grants')->insert($row);
+        DB::connection($other)->table('grants')->insert($row);
 
-        [$primary, $replica] = $placement;
+        try {
+            $this->strategy()->rebalance('grants', 'user_id', 'id', $target, null, null, null, [
+                'connections' => config('sharding.connections'),
+                'table' => 'grants',
+            ]);
 
-        DB::connection($primary)->table('grants')->insert([
-            'id' => 1,
-            'user_id' => 1,
-            'role' => 'one',
-            'is_replica' => false,
-        ]);
+            $this->fail('a key on two connections was decided rather than refused');
+        } catch (RebalanceIncomplete $e) {
+            $this->assertSame(1, $e->failed);
+        }
 
-        // the operator moves the row onto the connection its replica lives on
-        $this->strategy()->rebalance('grants', 'user_id', 'id', $primary, $replica, null, null, [
-            'connections' => config('sharding.connections'),
-            'table' => 'grants',
-            'replica_count' => 1,
-        ]);
-
-        $arrived = DB::connection($replica)->table('grants')->where('id', 1)->first();
-        $left = DB::connection($primary)->table('grants')->where('id', 1)->first();
-
-        $this->assertNotNull($arrived);
-        $this->assertEmpty($arrived->is_replica, 'the row did not arrive as the primary');
-        $this->assertNotNull($left, 'the copy the metadata still advertises was deleted');
-        $this->assertNotEmpty($left->is_replica, 'the old primary is still claiming to be the row');
+        $this->assertSame(1, DB::connection($target)->table('grants')->count());
+        $this->assertSame(1, DB::connection($other)->table('grants')->count());
     }
 
     /**

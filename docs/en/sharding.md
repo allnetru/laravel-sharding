@@ -125,11 +125,18 @@ not per row: on a colocated one-to-many table one key covers several rows, so
 redirecting it when the first one lands points the routing away from the
 siblings still on the source.
 
-**Once the routing is handed over, the placement it names is written.** The
-strategy decides what the replicas of a moved key become, and where it picks a
-connection the move never wrote to — an explicit `--to` outside the key's old
-placement — the metadata used to advertise a replica holding nothing. The copies
-are put there now.
+**Once both metadata steps are done, the placement they name is written.** A
+pass over the range, not a step tied to what this run moved: the strategy
+decides what the replicas of a moved key become, and where it picks a connection
+the move never wrote to — an explicit `--to` outside the key's old placement —
+the metadata used to advertise a replica holding nothing. Every connection the
+routing names now holds a copy marked as a replica; a missing one is written, a
+different row under that identifier is left alone and fails the run.
+
+Being a pass rather than a step is what makes it work for a range strategy,
+which chooses its replicas inside `afterRebalance()` and is not row-aware at
+all, and what makes a rerun repair a placement half-written by a database error
+even though the primary mapping is already correct.
 
 **A populated colocation group cannot be rebalanced one table at a time, and
 this command does one table**, so it refuses. The routing belongs to the group,

@@ -133,11 +133,17 @@ class ShardRebalanceHandoffTest extends TestCase
             'is_replica' => true,
         ]);
 
-        $this->strategy()->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_3', null, null, [
-            'connections' => config('sharding.connections'),
-            'table' => 'grants',
-            'replica_count' => 1,
-        ]);
+        try {
+            $this->strategy()->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_3', null, null, [
+                'connections' => config('sharding.connections'),
+                'table' => 'grants',
+                'replica_count' => 1,
+            ]);
+
+            $this->fail('a replica that could not be placed was reported as a complete rebalance');
+        } catch (RebalanceIncomplete $e) {
+            $this->assertSame(1, $e->failed);
+        }
 
         $this->assertSame(
             'somebody else',
@@ -270,6 +276,133 @@ class ShardRebalanceHandoffTest extends TestCase
     }
 
     /**
+     * With an explicit target, the connections the key names keep their copy.
+     *
+     * `placementFor()` answers with the explicit target alone, so a retention
+     * rule derived from it deleted the old primary — while a row-aware
+     * strategy promotes that primary into the replica list, leaving metadata
+     * advertising a replica on a connection the row had just been deleted
+     * from. Found in review.
+     *
+     * It belongs here rather than beside the key tests: it needs a routing
+     * that actually follows `--to`, and a fake whose `determine()` is a hash
+     * does not — the placement pass then correctly reads the moved row as
+     * being in the wrong place and demotes it, which is a fake that does not
+     * keep its promises rather than a bug.
+     *
+     * @return void
+     */
+    public function testWithAnExplicitTargetTheOldPrimaryBecomesTheReplica(): void
+    {
+        // the key's placement before the move, which the fallback names
+        MappedStrategy::$fallback = ['shard_1', 'shard_2'];
+
+        DB::connection('shard_1')->table('grants')->insert([
+            'id' => 1,
+            'user_id' => 7,
+            'role' => 'one',
+            'is_replica' => false,
+        ]);
+
+        // moved onto the connection its own replica lives on
+        $this->strategy()->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_2', null, null, [
+            'connections' => config('sharding.connections'),
+            'table' => 'grants',
+            'replica_count' => 1,
+        ]);
+
+        $arrived = DB::connection('shard_2')->table('grants')->where('id', 1)->first();
+        $left = DB::connection('shard_1')->table('grants')->where('id', 1)->first();
+
+        $this->assertNotNull($arrived);
+        $this->assertEmpty($arrived->is_replica, 'the row did not arrive as the primary');
+        $this->assertNotNull($left, 'the copy the metadata still advertises was deleted');
+        $this->assertNotEmpty($left->is_replica, 'the old primary is still claiming to be the row');
+    }
+
+    /**
+     * A range strategy gets its placement materialised too.
+     *
+     * Materialisation used to sit inside the redirect loop, which only runs
+     * for a `RowMoveAware` strategy — so `RangeStrategy` and
+     * `DbRangeStrategy`, which choose the replicas of a moved key inside
+     * `afterRebalance()`, had nothing write them. The run reported success
+     * with the routing advertising a replica that did not exist. Found in
+     * review.
+     *
+     * @return void
+     */
+    public function testARangeStrategyGetsItsPlacementMaterialised(): void
+    {
+        DB::connection('shard_1')->table('grants')->insert([
+            'id' => 1,
+            'user_id' => 7,
+            'role' => 'one',
+            'is_replica' => false,
+        ]);
+
+        // only SupportsAfterRebalance, the shape both range strategies have
+        $strategy = app(RangingStrategy::class);
+
+        $strategy->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_3', null, null, [
+            'connections' => config('sharding.connections'),
+            'table' => 'grants',
+            'replica_count' => 1,
+        ]);
+
+        $this->assertSame(['shard_3', 'shard_2'], MappedStrategy::$fallback, 'the range was not handed over');
+
+        $replica = DB::connection('shard_2')->table('grants')->where('id', 1)->first();
+
+        $this->assertNotNull($replica, 'the routing advertises a replica that was never written');
+        $this->assertNotEmpty($replica->is_replica);
+    }
+
+    /**
+     * Running it again restores a copy the placement names and does not have.
+     *
+     * Materialisation was reached only through a redirect, so a database error
+     * while writing a replica left the routing committed and the copy absent —
+     * and a rerun, seeing the primary mapping already correct, produced no
+     * redirect and never tried again. As a pass over the range it runs
+     * regardless. Found in review.
+     *
+     * @return void
+     */
+    public function testRunningItAgainRestoresAMissingReplica(): void
+    {
+        DB::connection('shard_1')->table('grants')->insert([
+            'id' => 1,
+            'user_id' => 7,
+            'role' => 'one',
+            'is_replica' => false,
+        ]);
+
+        $this->strategy()->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_3', null, null, [
+            'connections' => config('sharding.connections'),
+            'table' => 'grants',
+            'replica_count' => 1,
+        ]);
+
+        // what a failure partway through writing the copies leaves behind
+        DB::connection('shard_2')->table('grants')->where('id', 1)->delete();
+
+        // and the routing is already right, so nothing needs redirecting
+        $this->assertSame(['shard_3', 'shard_2'], MappedStrategy::$map['7']);
+
+        $this->strategy()->rebalance('grants', 'user_id', 'id', null, null, null, null, [
+            'connections' => config('sharding.connections'),
+            'table' => 'grants',
+            'replica_count' => 1,
+        ]);
+
+        $replica = DB::connection('shard_2')->table('grants')->where('id', 1)->first();
+
+        $this->assertNotNull($replica, 'the rerun did not restore the copy');
+        $this->assertNotEmpty($replica->is_replica);
+    }
+
+    /**
      * A strategy whose routing is a map this test can watch.
      *
      * @return MappedStrategy
@@ -356,6 +489,77 @@ class MappedStrategy implements Strategy, RowMoveAware, SupportsAfterRebalance
         array $config
     ): void {
         $this->handedOver = true;
+    }
+
+    /**
+     * @return bool
+     */
+    public function canRebalance(): bool
+    {
+        return true;
+    }
+
+    /**
+     * @param mixed $key
+     * @param array<int, string> $connections
+     * @param array<string, mixed> $config
+     * @return void
+     */
+    public function recordMeta(mixed $key, array $connections, array $config): void
+    {
+    }
+
+    /**
+     * @param mixed $key
+     * @param string $connection
+     * @param array<string, mixed> $config
+     * @return void
+     */
+    public function recordReplica(mixed $key, string $connection, array $config): void
+    {
+    }
+}
+
+/**
+ * Routing handed over as a range, which is the shape both range strategies
+ * have: `SupportsAfterRebalance` and not `RowMoveAware`.
+ */
+class RangingStrategy implements Strategy, SupportsAfterRebalance
+{
+    use Rebalanceable;
+
+    /**
+     * @param mixed $key
+     * @param array<string, mixed> $config
+     * @return array<int, string>
+     */
+    public function determine(mixed $key, array $config): array
+    {
+        return MappedStrategy::$fallback;
+    }
+
+    /**
+     * @param array<string, mixed> $config
+     * @return void
+     */
+    public function afterRebalance(
+        string $table,
+        string $shardKey,
+        ?string $from,
+        ?string $to,
+        ?int $start,
+        ?int $end,
+        array $config
+    ): void {
+        if ($to === null) {
+            return;
+        }
+
+        $names = array_keys((array) ($config['connections'] ?? []));
+        sort($names);
+        $index = (int) array_search($to, $names, true);
+
+        MappedStrategy::$fallback = [$to, $names[($index + 2) % count($names)]];
     }
 
     /**
