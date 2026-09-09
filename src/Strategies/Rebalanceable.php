@@ -364,7 +364,7 @@ trait Rebalanceable
                     | the `is_replica = false` scope: a duplicate that nothing
                     | can see and nothing rebuilds.
                     */
-                    if (in_array($connection, $this->copiesToKeep($manager, $table, $to, $row, $placement, $config), true)) {
+                    if (in_array($connection, $this->copiesToKeep($to, $placement), true)) {
                         $sourceConn->table($table->table)->where($table->rowKey, $id)->update(['is_replica' => true]);
                     } else {
                         $sourceConn->table($table->table)->where($table->rowKey, $id)->delete();
@@ -884,48 +884,25 @@ trait Rebalanceable
     }
 
     /**
-     * The connections that keep a copy of the row once it has moved.
+     * The connections on which the copy left behind by a move belongs.
      *
-     * Without an explicit target this is the tail of the placement the routing
-     * gives — the connections the key's replicas belong on.
+     * Following the routing, the key's replicas are the placement's tail, and
+     * a source that is one of them keeps its copy as the replica. Under `--to`
+     * nothing is kept: which connections the key names afterwards is the
+     * strategy's decision inside `rowMoved()`, made after this row has moved,
+     * and a copy kept on a guess about it is a copy nothing advertises when the
+     * guess is wrong — hidden by the `is_replica = false` scope, skipped by
+     * every later walk, and never cleaned up. The source is released, and
+     * `materialisePlacements()` writes the copies the routing then names, on
+     * the source too when the strategy puts a replica back there.
      *
-     * With `--to` it cannot be, and deriving it from that one-element array
-     * deleted a copy the metadata still advertised. The operator names the
-     * primary; the strategy decides what the replicas become, and both
-     * `RedisStrategy` and `DbHashRangeStrategy` promote the old primary into
-     * the replica list when the target used to be one of its replicas. So the
-     * connections the key currently names are kept, minus the target, capped
-     * by `replica_count` — which reproduces that promotion and, with no
-     * replicas configured, keeps nothing. Whatever the strategy then decides
-     * the replicas are, `materialisePlacements()` writes.
-     *
-     * @param ShardingManager $manager
-     * @param ShardedTable $table
      * @param string|null $to
-     * @param object $row
      * @param list<string> $placement The placement this move used.
-     * @param array<string, mixed> $config
      * @return list<string>
      */
-    protected function copiesToKeep(
-        ShardingManager $manager,
-        ShardedTable $table,
-        ?string $to,
-        object $row,
-        array $placement,
-        array $config,
-    ): array {
-        if ($to === null) {
-            return array_slice($placement, 1);
-        }
-
-        $current = $this->placementFor($manager, $table, null, $row);
-
-        return array_slice(
-            array_values(array_diff($current, [$to])),
-            0,
-            (int) ($config['replica_count'] ?? 0),
-        );
+    protected function copiesToKeep(?string $to, array $placement): array
+    {
+        return $to === null ? array_slice($placement, 1) : [];
     }
 
     /**

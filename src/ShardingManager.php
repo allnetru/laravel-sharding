@@ -56,22 +56,22 @@ class ShardingManager
     {
         [$strategy, $tableConfig] = $this->strategyFor($model);
 
-        $migrations = $this->config['migrations'] ?? [];
-
-        if ($migrations) {
-            $tableConfig['connections'] = array_diff_key(
-                $tableConfig['connections'],
-                $migrations
-            );
-        }
-
-        $connections = $strategy->determine($key, $tableConfig);
-
-        return $connections;
+        return $strategy->determine($key, $tableConfig);
     }
 
     /**
      * Resolve strategy instance and configuration for model or table.
+     *
+     * The configuration is the one the strategy routes by, so the connections
+     * listed in `sharding.migrations` are already left out of it. That
+     * exclusion used to live in `connectionFor()` alone, and every other
+     * consumer of this configuration saw the full list: an insert resolved its
+     * placement against it and could land a new row on a shard being taken
+     * out, and `recordMeta()` and the rebalance namespaced their routing-cache
+     * writes by it while the reads were namespaced by the filtered list, so a
+     * handover was invisible to readers until the entry expired. One list,
+     * assembled once, is the fix for all of it. `connectionsFor()` is the
+     * unfiltered view, for the code that has to scan a shard on its way out.
      *
      * @param Model|string $model
      * @return array{0: Strategy, 1: array<string, mixed>}
@@ -90,7 +90,10 @@ class ShardingManager
 
         /** @var Strategy $strategy */
         $strategy = app($strategyClass);
-        $tableConfig['connections'] = $tableConfig['connections'] ?? ($this->config['connections'] ?? []);
+        $tableConfig['connections'] = array_diff_key(
+            $tableConfig['connections'] ?? ($this->config['connections'] ?? []),
+            $this->config['migrations'] ?? [],
+        );
         $tableConfig['replica_count'] = $tableConfig['replica_count'] ?? ($this->config['replica_count'] ?? 0);
         $tableConfig['table'] = $table;
 

@@ -21,7 +21,11 @@ When preparing to migrate or decommission shards, list them in `DB_SHARD_MIGRATI
 DB_SHARD_MIGRATIONS="shard-1;shard-2"
 ```
 
-Shards listed here are skipped for new writes until data is moved.
+Shards listed here are left out of the configuration `ShardingManager::strategyFor()`
+hands a strategy, so nothing routed through it — a read, a new row's placement,
+`recordMeta()`, a rebalance — names them until they are taken off the list.
+`connectionsFor()` is the unfiltered view, for the code that has to scan a shard on
+its way out.
 
 ### Database configuration
 
@@ -127,7 +131,18 @@ one may take it.** A row-aware strategy redirects each key. A range strategy
 hands a range over, so it needs both `--start` and `--end` — a range with
 neither bound is a catch-all that would send every key of the table to the
 target, including every key that never moved. A strategy that can do neither is
-refused an explicit target outright.
+refused an explicit target outright. `db_hash_range` is row-aware but routes by
+slot, and a slot is a hash of the key rather than a range of it, so it refuses
+`--to` combined with either bound: the keys inside the bounds share their slots
+with keys outside them, and redirecting a slot after moving part of it would
+strand the rest. Move by the routing, or the whole connection with `--from`.
+
+**Under `--to` the source copy is released, not kept.** Which connections a key
+names after the handover is the strategy's decision inside `rowMoved()`, made
+after the row has moved, and a copy kept on a guess about it is a copy nothing
+advertises when the guess is wrong. The placement pass writes the copies the
+routing then names — on the source too, when the strategy puts a replica back
+there.
 
 **Replica copies are not moved.** A replica belongs on a replica connection
 rather than on the primary its key names, so the rule the walk applies is not
@@ -289,9 +304,12 @@ metadata connection, so a pinned read paid a lookup there before it could run �
 which on two shards made it slower than the fan-out it replaced. The lookup is
 remembered in the cache store named by `sharding.routing_cache`, written through
 by `recordMeta()` and `rowMoved()` whenever the strategy changes the routing
-itself, and namespaced by the connection list so a change of topology is a new
-namespace rather than a window of stale answers. A store that cannot be reached
-is not consulted.
+itself, and namespaced by the connections as configured — names and weights —
+and the replica count, so a change of topology is a new namespace rather than a
+window of stale answers. The configuration every caller derives the namespace
+from is the one `strategyFor()` hands out, migrating connections already left
+out, so a reader and a writer of the same entry cannot disagree about where it
+is. A store that cannot be reached is not consulted.
 
 **Recording a slot is skipped when the cache already says so.** The `created`
 hook records the slot after every insert, in a transaction with a locked read;

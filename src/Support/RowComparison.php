@@ -27,7 +27,9 @@ final class RowComparison
      * towards keeping both.
      *
      * `is_replica` is left out of it — which copy is primary is what is being
-     * decided, not evidence about which row this is.
+     * decided, not evidence about which row this is. The order of the columns
+     * is not part of the row either: two connections may have grown the same
+     * table in different steps and read it back in different orders.
      *
      * @param array<string, mixed> $target The row already there.
      * @param array<string, mixed> $source The row being moved.
@@ -36,6 +38,8 @@ final class RowComparison
     public static function same(array $target, array $source): bool
     {
         unset($target['is_replica'], $source['is_replica']);
+        ksort($target);
+        ksort($source);
 
         if (array_keys($target) !== array_keys($source)) {
             return false;

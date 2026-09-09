@@ -355,6 +355,30 @@ class QueryBudgetTest extends TestCase
     }
 
     /**
+     * A new row never lands on a shard listed in `sharding.migrations`.
+     *
+     * `connectionFor()` left those out, but the insert resolved its placement
+     * through `strategyFor()` and `determine()` directly, against the full
+     * list — so the one path that writes could put a row on the shard being
+     * taken out. Found in review.
+     *
+     * @return void
+     */
+    public function testAnInsertAvoidsAShardMarkedForMigration(): void
+    {
+        config(['sharding.migrations' => ['shard_b' => true]]);
+        app()->instance(ShardingManager::class, new ShardingManager(config('sharding')));
+
+        for ($tenant = 1; $tenant <= 20; $tenant++) {
+            $item = BudgetItem::create(['tenant_id' => $tenant, 'name' => 'row']);
+
+            $this->assertSame('shard_a', $item->getConnectionName(), "tenant {$tenant} was written to a migrating shard");
+        }
+
+        $this->assertSame(0, DB::connection('shard_b')->table('budget_items')->count());
+    }
+
+    /**
      * Put one row for the tenant in place, so its slot is recorded and seen.
      *
      * @param int $tenant

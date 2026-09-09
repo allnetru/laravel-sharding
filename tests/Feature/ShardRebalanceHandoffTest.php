@@ -253,12 +253,14 @@ class ShardRebalanceHandoffTest extends TestCase
             DB::connection('shard_3')->table('grants')->where('id', 1)->count(),
             'the row did not move',
         );
-        // the source keeps its copy as the replica this key still names it
-        // for, which is the retention rule rather than a failure to release
-        $left = DB::connection('shard_1')->table('grants')->where('id', 1)->first();
-
-        $this->assertNotNull($left);
-        $this->assertNotEmpty($left->is_replica, 'the source is still claiming to be the row');
+        // the source is released: under an explicit target which connections
+        // the key names afterwards is the strategy's decision, and this one
+        // will not name the source, so a copy kept there would be one nothing
+        // advertises
+        $this->assertNull(
+            DB::connection('shard_1')->table('grants')->where('id', 1)->first(),
+            'the source kept a copy the routing will never name',
+        );
 
         // the same command again, with the store reachable this time
         $second = $this->strategy();
@@ -277,13 +279,13 @@ class ShardRebalanceHandoffTest extends TestCase
     }
 
     /**
-     * With an explicit target, the connections the key names keep their copy.
+     * With an explicit target, the connections the key names afterwards hold a copy.
      *
-     * `placementFor()` answers with the explicit target alone, so a retention
-     * rule derived from it deleted the old primary — while a row-aware
-     * strategy promotes that primary into the replica list, leaving metadata
-     * advertising a replica on a connection the row had just been deleted
-     * from. Found in review.
+     * A row-aware strategy moved onto its own replica promotes the old primary
+     * into the replica list. The move releases the source regardless — it
+     * cannot know what the strategy will decide — and the placement pass writes
+     * the copy back, so the metadata never advertises a replica on a connection
+     * holding nothing. Found in review.
      *
      * It belongs here rather than beside the key tests: it needs a routing
      * that actually follows `--to`, and a fake whose `determine()` is a hash
@@ -319,6 +321,48 @@ class ShardRebalanceHandoffTest extends TestCase
         $this->assertEmpty($arrived->is_replica, 'the row did not arrive as the primary');
         $this->assertNotNull($left, 'the copy the metadata still advertises was deleted');
         $this->assertNotEmpty($left->is_replica, 'the old primary is still claiming to be the row');
+    }
+
+    /**
+     * A target the key never named leaves nothing on the old primary.
+     *
+     * The retention rule used to keep the source copy whenever the key's
+     * current placement still had room for it under `replica_count`, on the
+     * assumption the strategy would name the old primary as a replica. This
+     * strategy, like `DbHashRangeStrategy`, keeps its replica list when the
+     * target is not on it, so the copy stayed behind marked as a replica that
+     * nothing advertised: hidden by the scope, skipped by every walk, and never
+     * cleaned up. Found in review.
+     *
+     * @return void
+     */
+    public function testATargetOutsideThePlacementLeavesNoCopyOnTheOldPrimary(): void
+    {
+        MappedStrategy::$fallback = ['shard_1', 'shard_2'];
+
+        DB::connection('shard_1')->table('grants')->insert([
+            'id' => 1,
+            'user_id' => 7,
+            'role' => 'one',
+            'is_replica' => false,
+        ]);
+
+        $this->strategy()->rebalance([new ShardedTable('grants', 'user_id', 'id')], 'shard_1', 'shard_3', null, null, [
+            'connections' => config('sharding.connections'),
+            'table' => 'grants',
+            'replica_count' => 1,
+        ]);
+
+        $this->assertSame(['7' => ['shard_3', 'shard_2']], MappedStrategy::$map);
+        $this->assertNull(
+            DB::connection('shard_1')->table('grants')->where('id', 1)->first(),
+            'the old primary kept a copy the routing does not name',
+        );
+        $this->assertNotEmpty(
+            DB::connection('shard_2')->table('grants')->where('id', 1)->value('is_replica'),
+            'the replica the routing names was not written',
+        );
+        $this->assertEmpty(DB::connection('shard_3')->table('grants')->where('id', 1)->value('is_replica'));
     }
 
     /**

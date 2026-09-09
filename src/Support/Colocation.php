@@ -54,16 +54,17 @@ class Colocation
 
         // both sides have to resolve a key through the same map, or the same
         // value lands on different shards and nothing below holds. A group is
-        // the declaration of exactly that; outside one, the strategies are
-        // compared instead, because two tables can be configured alike
-        // without anybody having named the pair
+        // the declaration of exactly that. Outside one only a table relating
+        // to itself qualifies: a strategy that keeps its routing in metadata
+        // keeps it per table, so two tables configured alike still send the
+        // same key wherever each of them happened to record it
         $group = $this->manager->groupFor($parent);
 
         if ($group !== $this->manager->groupFor($related)) {
             return false;
         }
 
-        if ($group === null && $this->manager->strategyFor($parent) !== $this->manager->strategyFor($related)) {
+        if ($group === null && $parent->getTable() !== $related->getTable()) {
             return false;
         }
 
@@ -72,8 +73,12 @@ class Colocation
 
         // the shared-column shape: both tables are sharded by the same column,
         // so rows carrying the same value are on the same shard. This is the
-        // shape the whole tenant_data group takes
-        if ($parentKey === $relatedKey) {
+        // shape the whole tenant_data group takes. The column has to be one
+        // both rows carry as a value rather than as their identity: a table
+        // sharded by its own primary key shares that column's name with a
+        // related row sharded by its own, and shares its value only where the
+        // relation joins the two — which is the parent-key shape below
+        if ($parentKey === $relatedKey && $parentKey !== $parent->getKeyName() && $relatedKey !== $related->getKeyName()) {
             return true;
         }
 

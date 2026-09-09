@@ -5,11 +5,13 @@ namespace Allnetru\Sharding\Tests\Unit;
 use Allnetru\Sharding\Models\ShardSlot;
 use Allnetru\Sharding\Strategies\DbHashRangeStrategy;
 use Allnetru\Sharding\Strategies\HashStrategy;
+use Allnetru\Sharding\Support\ShardedTable;
 use Allnetru\Sharding\Tests\TestCase;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use InvalidArgumentException;
 
 class DbHashRangeStrategyTest extends TestCase
 {
@@ -180,6 +182,38 @@ class DbHashRangeStrategyTest extends TestCase
         $this->assertSame('shard1', $slot->connection);
         $this->assertSame(['shard2'], $slot->replicas);
         $this->assertSame(1, ShardSlot::count());
+    }
+
+    /**
+     * A slot is a hash of the key, so keys inside a range share slots with keys
+     * outside it; redirecting a slot after moving only part of it strands the
+     * rest. Found in review.
+     */
+    public function testABoundedMoveToAnExplicitTargetIsRefused(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessageMatches('/routes by slot/');
+
+        (new DbHashRangeStrategy())->rebalance([new ShardedTable('users', 'id', 'id')], null, 'shard2', 1, 10, $this->baseConfig());
+    }
+
+    public function testABoundedMoveByTheRoutingIsNotRefusedUpFront(): void
+    {
+        $strategy = new class () extends DbHashRangeStrategy {
+            public bool $reached = false;
+
+            protected function scannable(\Allnetru\Sharding\ShardingManager $manager, string $table): array
+            {
+                $this->reached = true;
+
+                return [];
+            }
+        };
+
+        $strategy->rebalance([new ShardedTable('users', 'id', 'id')], null, null, 1, 10, $this->baseConfig());
+        $strategy->rebalance([new ShardedTable('users', 'id', 'id')], null, 'shard2', null, null, $this->baseConfig());
+
+        $this->assertTrue($strategy->reached);
     }
 
     private function baseConfig(): array
