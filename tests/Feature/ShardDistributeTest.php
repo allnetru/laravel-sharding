@@ -191,6 +191,89 @@ class ShardDistributeTest extends TestCase
     }
 
     /**
+     * A replica already on the target is promoted, not collided with.
+     *
+     * With replication on — and one replica is the default — the copy of a row
+     * frequently sits on exactly the connection its key names, which on two
+     * shards is every time. An unconditional insert violates the primary key
+     * and takes the whole repair down with it. Found in review.
+     *
+     * @return void
+     */
+    public function testAReplicaOnTheTargetIsPromoted(): void
+    {
+        [$right, $wrong] = $this->shardsFor(1);
+
+        DB::connection($wrong)->table('holders')->insert(['id' => 1, 'is_replica' => false]);
+        DB::connection($right)->table('holders')->insert(['id' => 1, 'is_replica' => true]);
+
+        $this->artisan('shards:distribute', ['model' => [Holder::class]])->assertSuccessful();
+
+        $this->assertSame(0, DB::connection($wrong)->table('holders')->count(), 'the misplaced primary stayed');
+
+        $promoted = DB::connection($right)->table('holders')->where('id', 1)->first();
+
+        $this->assertNotNull($promoted);
+        $this->assertEmpty($promoted->is_replica, 'the copy was left as a replica');
+    }
+
+    /**
+     * A run interrupted between the write and the delete is recoverable.
+     *
+     * The documented recovery is to run the command again, and that only works
+     * if finding the row already on the target is a state rather than an
+     * error.
+     *
+     * @return void
+     */
+    public function testARunInterruptedAfterTheWriteIsRecoverable(): void
+    {
+        [$right, $wrong] = $this->shardsFor(1);
+
+        // exactly what an interruption leaves behind: the row on both
+        DB::connection($wrong)->table('holders')->insert(['id' => 1, 'is_replica' => false]);
+        DB::connection($right)->table('holders')->insert(['id' => 1, 'is_replica' => false]);
+
+        $this->artisan('shards:distribute', ['model' => [Holder::class]])->assertSuccessful();
+
+        $this->assertSame(0, DB::connection($wrong)->table('holders')->count());
+        $this->assertSame(1, DB::connection($right)->table('holders')->count());
+    }
+
+    /**
+     * A model whose primary key is not `id` is paged and deleted by its own.
+     *
+     * @return void
+     */
+    public function testAModelWithItsOwnPrimaryKeyIsSwept(): void
+    {
+        foreach (['shard_1', 'shard_2'] as $connection) {
+            Schema::connection($connection)->create('oddities', function (Blueprint $table): void {
+                $table->unsignedBigInteger('oddity_key')->primary();
+                $table->unsignedBigInteger('holder_id');
+                $table->boolean('is_replica')->default(false);
+            });
+        }
+
+        config(['sharding.tables.oddities' => ['strategy' => 'hash', 'replica_count' => 0, 'group' => 'holder_data']]);
+        config(['sharding.groups.holder_data' => ['holders', 'holder_notes', 'oddities']]);
+        app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
+
+        [$right, $wrong] = $this->shardsFor(1, Oddity::class);
+
+        DB::connection($wrong)->table('oddities')->insert([
+            'oddity_key' => 500,
+            'holder_id' => 1,
+            'is_replica' => false,
+        ]);
+
+        $this->artisan('shards:distribute', ['model' => [Oddity::class]])->assertSuccessful();
+
+        $this->assertSame(1, DB::connection($right)->table('oddities')->count(), 'it did not arrive');
+        $this->assertSame(0, DB::connection($wrong)->table('oddities')->count(), 'it stayed behind');
+    }
+
+    /**
      * The shard a key names, and one it does not.
      *
      * @param int $key The shard key value.
@@ -243,4 +326,23 @@ class PlainRow extends Model
     protected $table = 'holders';
 
     public $timestamps = false;
+}
+
+class Oddity extends Model
+{
+    use Shardable;
+
+    protected $table = 'oddities';
+
+    protected $primaryKey = 'oddity_key';
+
+    protected string $shardKey = 'holder_id';
+
+    public $incrementing = false;
+
+    public $timestamps = false;
+
+    protected $guarded = [];
+
+    protected $casts = ['is_replica' => 'bool'];
 }

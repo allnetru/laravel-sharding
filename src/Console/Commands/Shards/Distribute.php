@@ -92,6 +92,10 @@ class Distribute extends Command
 
             $table = $model->getTable();
             $key = $model->getShardKey();
+            // identity is the model's own primary key, whatever it is called:
+            // paging and deleting by a hardcoded `id` breaks every model that
+            // names its key something else
+            $rowKey = $model->getKeyName();
             $connections = array_keys((array) $manager->connectionsFor($model));
 
             if ($connections === []) {
@@ -126,7 +130,7 @@ class Distribute extends Command
                     continue;
                 }
 
-                [$found, $carried] = $this->sweep($manager, $table, $key, $source, $chunk, $dryRun);
+                [$found, $carried] = $this->sweep($manager, $table, $key, $rowKey, $source, $chunk, $dryRun);
 
                 $misplaced += $found;
                 $moved += $carried;
@@ -188,7 +192,8 @@ class Distribute extends Command
      *
      * @param ShardingManager $manager
      * @param string $table
-     * @param string $key The shard key.
+     * @param string $key The shard key, which decides where a row belongs.
+     * @param string $rowKey The primary key, which identifies one row.
      * @param string $source The connection being swept.
      * @param int $chunk
      * @param bool $dryRun
@@ -198,6 +203,7 @@ class Distribute extends Command
         ShardingManager $manager,
         string $table,
         string $key,
+        string $rowKey,
         string $source,
         int $chunk,
         bool $dryRun,
@@ -207,17 +213,17 @@ class Distribute extends Command
         $after = null;
 
         do {
-            $query = DB::connection($source)->table($table)->orderBy('id')->limit($chunk);
+            $query = DB::connection($source)->table($table)->orderBy($rowKey)->limit($chunk);
 
             if ($after !== null) {
-                $query->where('id', '>', $after);
+                $query->where($rowKey, '>', $after);
             }
 
             $rows = $query->get();
 
             foreach ($rows as $row) {
                 $attributes = (array) $row;
-                $after = $attributes['id'] ?? $after;
+                $after = $attributes[$rowKey] ?? $after;
 
                 /*
                 | A replica copy belongs on a replica connection rather than on
@@ -248,21 +254,65 @@ class Distribute extends Command
                     continue;
                 }
 
-                /*
-                | Written before it is removed, and deliberately in that order.
-                | Interrupted between the two this leaves the row on both
-                | shards, which a re-run corrects — the copy on the wrong shard
-                | is still misplaced and gets moved again. The other order
-                | loses the row.
-                */
-                DB::connection($target)->table($table)->insert($attributes);
-                DB::connection($source)->table($table)->where('id', $attributes['id'])->delete();
+                $this->carry($table, $rowKey, $attributes, $source, $target);
 
                 $moved++;
             }
         } while ($rows->count() === $chunk);
 
         return [$misplaced, $moved];
+    }
+
+    /**
+     * Carry one row from where it is to where its key says it belongs.
+     *
+     * The target can already hold that primary key, and for two reasons that
+     * both have to be handled rather than crashed on.
+     *
+     * **A replica copy of the same row.** With replication on — and the
+     * default is one replica — the copy of a row frequently sits on exactly
+     * the connection the key names, which on two shards is every time. An
+     * unconditional insert then violates the primary key and takes the whole
+     * repair down with it. The copy is promoted instead: it is already the
+     * right bytes on the right shard, and all it lacks is being the primary.
+     *
+     * **A previous run interrupted between the write and the delete.** The
+     * documented recovery is to run the command again, and that only works if
+     * finding the row already there is a state rather than an error. The
+     * source copy is removed and the count moves on.
+     *
+     * @param string $table
+     * @param string $rowKey The primary key.
+     * @param array<string, mixed> $attributes The row as it is on the source.
+     * @param string $source
+     * @param string $target
+     * @return void
+     */
+    protected function carry(string $table, string $rowKey, array $attributes, string $source, string $target): void
+    {
+        $id = $attributes[$rowKey] ?? null;
+        $existing = DB::connection($target)->table($table)->where($rowKey, $id)->first();
+
+        if ($existing === null) {
+            /*
+            | Written before it is removed, and deliberately in that order.
+            | Interrupted between the two this leaves the row on both shards,
+            | which the branch above corrects on a re-run. The other order
+            | loses the row.
+            */
+            DB::connection($target)->table($table)->insert($attributes);
+            DB::connection($source)->table($table)->where($rowKey, $id)->delete();
+
+            return;
+        }
+
+        if (!empty(((array) $existing)['is_replica'])) {
+            DB::connection($target)->table($table)->where($rowKey, $id)->update(
+                array_merge($attributes, ['is_replica' => false]),
+            );
+        }
+
+        DB::connection($source)->table($table)->where($rowKey, $id)->delete();
     }
 
     /**

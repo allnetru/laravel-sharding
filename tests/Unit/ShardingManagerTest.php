@@ -139,8 +139,16 @@ class FakeStrategy implements Strategy
         return false;
     }
 
-    public function rebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): int
-    {
+    public function rebalance(
+        string $table,
+        string $shardKey,
+        string $rowKey,
+        ?string $from,
+        ?string $to,
+        ?int $start,
+        ?int $end,
+        array $config
+    ): int {
         $this->lastConfig = $config;
 
         return 0;

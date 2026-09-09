@@ -59,14 +59,31 @@ class Rebalance extends Command
         }
 
         /*
-        | The shard key, not the primary key. For a colocated table those are
-        | different columns, and rebalancing by the wrong one moves rows the
-        | slot change never asked about while leaving the ones it did — which
-        | is worse than not rebalancing at all, because the slot table then
+        | Two keys, and mixing them up costs different things. The shard key is
+        | what a slot is computed from, so it decides routing and the range;
+        | routing by the primary key instead moves rows the slot change never
+        | asked about and leaves the ones it did, after which the slot table
         | says something untrue about where the data is.
+        |
+        | The row key is what identifies one row. On a colocated one-to-many
+        | table — several roles for one user — identifying by the shard key
+        | means deleting every one of that user's rows after moving one of
+        | them. Routing by the wrong key misplaces rows; identifying by the
+        | wrong key destroys them.
         */
-        $key = method_exists($model, 'getShardKey') ? $model->getShardKey() : $model->getKeyName();
-        $moved = $strategy->rebalance($table, $key, $from, $to, $start !== null ? (int) $start : null, $end !== null ? (int) $end : null, $config);
+        $shardKey = method_exists($model, 'getShardKey') ? $model->getShardKey() : $model->getKeyName();
+        $rowKey = $model->getKeyName();
+
+        $moved = $strategy->rebalance(
+            $table,
+            $shardKey,
+            $rowKey,
+            $from,
+            $to,
+            $start !== null ? (int) $start : null,
+            $end !== null ? (int) $end : null,
+            $config,
+        );
 
         $this->info("Moved {$moved} records.");
 

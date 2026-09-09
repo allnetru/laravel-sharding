@@ -45,7 +45,8 @@ interface Strategy
      * Move records between shards.
      *
      * @param string $table
-     * @param string $key
+     * @param string $shardKey The column a slot is computed from: it decides routing.
+     * @param string $rowKey The column that identifies one row: it decides identity.
      * @param string|null $from
      * @param string|null $to
      * @param int|null $start
@@ -53,5 +54,14 @@ interface Strategy
      * @param array $config
      * @return int number of moved records
      */
-    public function rebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): int;
+    public function rebalance(
+        string $table,
+        string $shardKey,
+        string $rowKey,
+        ?string $from,
+        ?string $to,
+        ?int $start,
+        ?int $end,
+        array $config
+    ): int;
 }

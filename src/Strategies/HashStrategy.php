@@ -80,8 +80,16 @@ class HashStrategy implements Strategy
     /**
      * @inheritdoc
      */
-    public function rebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): int
-    {
+    public function rebalance(
+        string $table,
+        string $shardKey,
+        string $rowKey,
+        ?string $from,
+        ?string $to,
+        ?int $start,
+        ?int $end,
+        array $config
+    ): int {
         throw new \RuntimeException('Rebalancing is not supported for hash strategy.');
     }
 }

@@ -57,7 +57,7 @@ class HashStrategyTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('Rebalancing is not supported for hash strategy.');
 
-        $strategy->rebalance('table', 'id', null, null, null, null, [
+        $strategy->rebalance('table', 'id', 'id', null, null, null, null, [
             'connections' => ['a' => ['weight' => 1]],
         ]);
     }

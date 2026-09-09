@@ -15,8 +15,21 @@ trait Rebalanceable
     /**
      * Move records between shard connections.
      *
+     * **Two keys, and they are not interchangeable.** The shard key is what a
+     * slot is computed from, so it is what the range filter and the routing
+     * use. The row key is what identifies one row, so it is what the insert,
+     * the update, the delete and the paging use.
+     *
+     * On a table whose shard key is unique they are the same column and the
+     * distinction costs nothing. On a colocated one-to-many table — several
+     * `user_roles` for one `user_id` — using the shard key for identity means
+     * `where('user_id', …)->delete()` after inserting a single row, which
+     * deletes every other role that user had. Routing by the wrong key
+     * misplaces rows; identifying by the wrong key destroys them.
+     *
      * @param string $table
-     * @param string $key
+     * @param string $shardKey The column a slot is computed from.
+     * @param string $rowKey The column that identifies one row.
      * @param string|null $from
      * @param string|null $to
      * @param int|null $start
@@ -24,8 +37,16 @@ trait Rebalanceable
      * @param array $config
      * @return int number of moved records
      */
-    public function rebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): int
-    {
+    public function rebalance(
+        string $table,
+        string $shardKey,
+        string $rowKey,
+        ?string $from,
+        ?string $to,
+        ?int $start,
+        ?int $end,
+        array $config
+    ): int {
         /** @var ShardingManager $manager */
         $manager = app(ShardingManager::class);
         $connections = array_keys($manager->connectionsFor($table));
@@ -39,16 +60,19 @@ trait Rebalanceable
 
         foreach ($connections as $connection) {
             $query = DB::connection($connection)->table($table);
+            // the range is over the shard key: a slot is a range of it
             if ($start !== null) {
-                $query->where($key, '>=', $start);
+                $query->where($shardKey, '>=', $start);
             }
             if ($end !== null) {
-                $query->where($key, '<=', $end);
+                $query->where($shardKey, '<=', $end);
             }
 
-            $query->chunkById($chunk, function ($rows) use ($manager, $table, $key, $config, $connection, $to, &$moved, &$failed) {
+            // paged by the row key, because the rows being deleted underneath
+            // this walk are the ones it is walking
+            $query->chunkById($chunk, function ($rows) use ($manager, $table, $shardKey, $rowKey, $config, $connection, $to, &$moved, &$failed) {
                 foreach ($rows as $row) {
-                    $targetConnections = $to ? [$to] : $manager->connectionFor($table, $row->$key);
+                    $targetConnections = $to ? [$to] : $manager->connectionFor($table, $row->$shardKey);
                     $target = $targetConnections[0];
                     if ($target === $connection) {
                         continue;
@@ -61,20 +85,21 @@ trait Rebalanceable
                     $sourceConn->beginTransaction();
 
                     try {
-                        $existing = $targetConn->table($table)->where($key, $row->$key)->first();
+                        $existing = $targetConn->table($table)->where($rowKey, $row->$rowKey)->first();
                         if ($existing) {
-                            $targetConn->table($table)->where($key, $row->$key)->update(array_merge((array) $row, ['is_replica' => false]));
-                            $sourceConn->table($table)->where($key, $row->$key)->update(['is_replica' => true]);
+                            $targetConn->table($table)->where($rowKey, $row->$rowKey)->update(array_merge((array) $row, ['is_replica' => false]));
+                            $sourceConn->table($table)->where($rowKey, $row->$rowKey)->update(['is_replica' => true]);
                         } else {
                             $targetConn->table($table)->insert((array) $row);
-                            $sourceConn->table($table)->where($key, $row->$key)->delete();
+                            $sourceConn->table($table)->where($rowKey, $row->$rowKey)->delete();
                         }
 
                         $targetConn->commit();
                         $sourceConn->commit();
 
                         if ($this instanceof RowMoveAware) {
-                            $this->rowMoved($row->$key, $target, $config);
+                            // the slot is the shard key's, not the row's
+                            $this->rowMoved($row->$shardKey, $target, $config);
                         }
 
                         $moved++;
@@ -84,7 +109,8 @@ trait Rebalanceable
 
                         Log::error('Failed to move row during rebalance', [
                             'table' => $table,
-                            'id' => $row->$key,
+                            'id' => $row->$rowKey,
+                            'shard_key' => $row->$shardKey,
                             'from' => $connection,
                             'to' => $target,
                             'exception' => $e,
@@ -93,11 +119,11 @@ trait Rebalanceable
                         $failed++;
                     }
                 }
-            }, $key);
+            }, $rowKey);
         }
 
         if ($this instanceof SupportsAfterRebalance) {
-            $this->afterRebalance($table, $key, $from, $to, $start, $end, $config);
+            $this->afterRebalance($table, $shardKey, $from, $to, $start, $end, $config);
         }
 
         Log::info('Rebalance completed', [
