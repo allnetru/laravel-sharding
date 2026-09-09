@@ -107,6 +107,8 @@ trait Rebalanceable
             });
         }
 
+        $clashes += $this->sharedRowKeys($table, $shardKey, $rowKey, $connections, $start, $end, $chunk);
+
         if ($clashes > 0) {
             throw new RebalanceIncomplete($table, 0, $clashes);
         }
@@ -142,6 +144,30 @@ trait Rebalanceable
                 try {
                     $existing = $targetConn->table($table)->where($rowKey, $row->$rowKey)->first();
 
+                    /*
+                    | The preflight looked at a target that was empty at the
+                    | time, and an earlier row of this same run may have filled
+                    | it since — two source connections holding different rows
+                    | under one identifier both converge on it. So the
+                    | comparison is repeated here, where the occupant is
+                    | whatever is actually there.
+                    */
+                    if ($existing && !RowComparison::same((array) $existing, (array) $row)) {
+                        $targetConn->rollBack();
+                        $sourceConn->rollBack();
+
+                        Log::error('Refused to move a row onto a different row with the same key', [
+                            'table' => $table,
+                            'id' => $row->$rowKey,
+                            'from' => $connection,
+                            'to' => $target,
+                        ]);
+
+                        $failed++;
+
+                        return;
+                    }
+
                     if ($existing) {
                         $targetConn->table($table)->where($rowKey, $row->$rowKey)->update(array_merge((array) $row, ['is_replica' => false]));
                     } else {
@@ -157,7 +183,7 @@ trait Rebalanceable
                     | the table carries a duplicate that nothing can see and
                     | nothing rebuilds.
                     */
-                    if (in_array($connection, array_slice($targetConnections, 1), true)) {
+                    if (in_array($connection, $this->copiesToKeep($manager, $table, $shardKey, $to, $row, $targetConnections), true)) {
                         $sourceConn->table($table)->where($rowKey, $row->$rowKey)->update(['is_replica' => true]);
                     } else {
                         $sourceConn->table($table)->where($rowKey, $row->$rowKey)->delete();
@@ -231,6 +257,160 @@ trait Rebalanceable
     }
 
     /**
+     * How many primary keys two source connections both hold.
+     *
+     * The preflight above asks whether a destination is occupied, which cannot
+     * see a clash created *during* the run: with several source connections
+     * being swept, two of them can hold different rows under one identifier
+     * that both route to a target empty when it was looked at. The first row
+     * lands, the second finds it, and without a comparison the first is lost.
+     *
+     * A primary key is unique within a connection, so any key two source
+     * connections share is either that clash or a duplicate of one row — both
+     * of which need a person, not a repair tool. Replicas are out of it on both
+     * sides — `walkRows()` does not visit them, and the count below asks for
+     * primaries only — because a replica sharing its primary's key on another
+     * connection is the normal state of a replicated row, and counting it would
+     * refuse every rebalance of a replicated table.
+     *
+     * Checked by intersecting pages rather than by holding every planned key,
+     * so this costs a query per page and a page of memory instead of growing
+     * with the size of the run.
+     *
+     * @param string $table
+     * @param string $shardKey
+     * @param string $rowKey
+     * @param list<string> $connections
+     * @param int|null $start
+     * @param int|null $end
+     * @param int $chunk
+     * @return int
+     */
+    protected function sharedRowKeys(
+        string $table,
+        string $shardKey,
+        string $rowKey,
+        array $connections,
+        ?int $start,
+        ?int $end,
+        int $chunk,
+    ): int {
+        if (count($connections) < 2) {
+            return 0;
+        }
+
+        $shared = 0;
+
+        foreach ($connections as $index => $connection) {
+            $others = array_slice($connections, $index + 1);
+
+            if ($others === []) {
+                continue;
+            }
+
+            $page = [];
+
+            $this->walkRows($table, $shardKey, $rowKey, $connection, $start, $end, $chunk, function ($row) use ($table, $rowKey, $others, $chunk, &$page, &$shared): void {
+                $page[] = $row->$rowKey;
+
+                if (count($page) >= $chunk) {
+                    $shared += $this->countShared($table, $rowKey, $others, $page);
+                    $page = [];
+                }
+            });
+
+            if ($page !== []) {
+                $shared += $this->countShared($table, $rowKey, $others, $page);
+            }
+        }
+
+        if ($shared > 0) {
+            Log::error('Refused a rebalance: one primary key is held by more than one source connection', [
+                'table' => $table,
+                'keys' => $shared,
+            ]);
+        }
+
+        return $shared;
+    }
+
+    /**
+     * How many of these keys the other connections hold as primaries.
+     *
+     * @param string $table
+     * @param string $rowKey
+     * @param list<string> $others
+     * @param list<mixed> $keys
+     * @return int
+     */
+    protected function countShared(string $table, string $rowKey, array $others, array $keys): int
+    {
+        $shared = 0;
+
+        foreach ($others as $other) {
+            $shared += DB::connection($other)
+                ->table($table)
+                ->whereIn($rowKey, $keys)
+                ->where(function ($query): void {
+                    $query->where('is_replica', false)->orWhereNull('is_replica');
+                })
+                ->count();
+        }
+
+        return $shared;
+    }
+
+    /**
+     * The connections that keep a copy of the row once it has moved.
+     *
+     * Without an explicit target this is the tail of the placement the routing
+     * gives — the connections the key's replicas belong on.
+     *
+     * **With `--to` it cannot be, and deriving it from that one-element array
+     * deleted a copy the metadata still advertised.** The operator names the
+     * primary; the strategy decides what the replicas become, and both
+     * `RedisStrategy` and `DbHashRangeStrategy` promote the old primary into
+     * the replica list when the target used to be one of its replicas. So the
+     * connections the key currently names are kept, minus the target, capped
+     * by `replica_count` — which reproduces that promotion and, with no
+     * replicas configured, keeps nothing.
+     *
+     * The strategy's own `rowMoved()` remains the authority on what the
+     * metadata says. Where the target is a connection the key never named, the
+     * two can choose different replicas; both hold the configured number, and
+     * the metadata is what reads follow.
+     *
+     * @param ShardingManager $manager
+     * @param string $table
+     * @param string $shardKey
+     * @param string|null $to
+     * @param object $row
+     * @param list<string> $targetConnections The placement this move used.
+     * @return list<string>
+     */
+    protected function copiesToKeep(
+        ShardingManager $manager,
+        string $table,
+        string $shardKey,
+        ?string $to,
+        object $row,
+        array $targetConnections,
+    ): array {
+        if (!$to) {
+            return array_slice($targetConnections, 1);
+        }
+
+        [, $config] = $manager->strategyFor($table);
+        $current = $this->placementFor($manager, $table, $shardKey, null, $row);
+
+        return array_slice(
+            array_values(array_diff($current, [$to])),
+            0,
+            (int) ($config['replica_count'] ?? 0),
+        );
+    }
+
+    /**
      * Walk one connection's rows in the range, in pages of the row key.
      *
      * Paged by the row key rather than by offset, because the rows being
@@ -270,6 +450,23 @@ trait Rebalanceable
 
         $query->chunkById($chunk, function ($rows) use ($each): void {
             foreach ($rows as $row) {
+                /*
+                | A replica copy belongs on a replica connection rather than on
+                | the primary its key names, so the rule this walk applies is
+                | not its rule — `shards:distribute` skips them for the same
+                | reason. Walking them carried each copy onto its own primary,
+                | where it compared equal, was written back unchanged and
+                | counted as a move: a transaction per replica and a number
+                | that meant nothing.
+                |
+                | The consequence worth knowing: retiring a connection that
+                | holds replicas leaves them behind, so those keys carry fewer
+                | copies than are configured until something rebuilds them.
+                */
+                if (!empty($row->is_replica)) {
+                    continue;
+                }
+
                 $each($row);
             }
         }, $rowKey);

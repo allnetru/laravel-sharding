@@ -527,6 +527,51 @@ class ShardDistributeTest extends TestCase
     }
 
     /**
+     * An omitted group table is inspected on the connections it actually uses.
+     *
+     * A group owner may name its own connection list, and a table whose rows
+     * live only there was declared empty by the global list — which let a
+     * partial group sweep through and report success. Found in review.
+     *
+     * @return void
+     */
+    public function testAnOmittedGroupTableIsInspectedOnItsOwnConnections(): void
+    {
+        config([
+            'database.connections.shard_3' => ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => ''],
+            // the group owner's own list, which the global one does not mention
+            'sharding.tables.holders.connections' => [
+                'shard_1' => ['weight' => 1],
+                'shard_3' => ['weight' => 1],
+            ],
+        ]);
+
+        Schema::connection('shard_3')->create('holder_notes', function (Blueprint $table): void {
+            $table->unsignedBigInteger('id')->primary();
+            $table->unsignedBigInteger('holder_id');
+            $table->boolean('is_replica')->default(false);
+        });
+
+        Schema::connection('shard_3')->create('holders', function (Blueprint $table): void {
+            $table->unsignedBigInteger('id')->primary();
+            $table->string('name')->nullable();
+            $table->boolean('is_replica')->default(false);
+        });
+
+        app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
+
+        // the omitted child holds rows only on the connection the global list
+        // never mentions
+        DB::connection('shard_3')->table('holder_notes')->insert([
+            'id' => 1,
+            'holder_id' => 1,
+            'is_replica' => false,
+        ]);
+
+        $this->artisan('shards:distribute', ['model' => [Holder::class]])->assertFailed();
+    }
+
+    /**
      * An active shard without the table stops the run before it starts.
      *
      * Leaving such a connection out of the sources does not stop the routing

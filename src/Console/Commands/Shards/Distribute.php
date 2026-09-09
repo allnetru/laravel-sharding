@@ -258,7 +258,7 @@ class Distribute extends Command
             ];
         }
 
-        return $this->groupsAreWhole($plan) ? $plan : null;
+        return $this->groupsAreWhole($manager, $plan) ? $plan : null;
     }
 
     /**
@@ -277,10 +277,11 @@ class Distribute extends Command
      * tables are configured before they exist — a schema is written ahead of
      * the code that fills it — without letting a real omission past.
      *
+     * @param ShardingManager $manager
      * @param list<array{table: string, key: string, rowKey: string, group: string|null, sources: list<string>}> $plan
      * @return bool
      */
-    protected function groupsAreWhole(array $plan): bool
+    protected function groupsAreWhole(ShardingManager $manager, array $plan): bool
     {
         $swept = [];
         $groups = [];
@@ -302,7 +303,7 @@ class Distribute extends Command
                     continue;
                 }
 
-                if ($this->holdsRows($table)) {
+                if ($this->holdsRows($manager, $table)) {
                     $left[$table] = true;
                 } else {
                     $empty[$table] = true;
@@ -335,12 +336,18 @@ class Distribute extends Command
     /**
      * Whether a table exists and holds anything, anywhere.
      *
+     * Asked of the manager rather than of `sharding.connections`, because a
+     * group owner may name its own connection list — and a table whose rows
+     * live only there was declared empty by the global list, which let a
+     * partial group sweep through.
+     *
+     * @param ShardingManager $manager
      * @param string $table
      * @return bool
      */
-    protected function holdsRows(string $table): bool
+    protected function holdsRows(ShardingManager $manager, string $table): bool
     {
-        foreach (array_keys((array) config('sharding.connections', [])) as $connection) {
+        foreach (array_keys((array) $manager->connectionsFor($table)) as $connection) {
             if (!Schema::connection($connection)->hasTable($table)) {
                 continue;
             }

@@ -108,6 +108,18 @@ means `where('user_id', ...)->delete()` after moving a single row, which
 removes every other role that user has. Getting the routing wrong loses a
 row's location; getting the identity wrong loses the row.
 
+**Replica copies are not moved.** A replica belongs on a replica connection
+rather than on the primary its key names, so the rule the walk applies is not
+its rule — `shards:distribute` skips them for the same reason. The consequence
+worth knowing before retiring a connection: replicas sitting on it stay there,
+so those keys carry fewer copies than are configured until something rebuilds
+them.
+
+The first pass also refuses a run in which two source connections hold the same
+primary key as primaries. A primary key is unique within a connection, so a key
+two of them share is either different rows under one identifier or a duplicate
+of one row, and both need a person rather than a repair tool.
+
 `rowMoved()` is called once per distinct shard key, after the whole run, and
 not per row: on a colocated one-to-many table one key covers several rows, so
 redirecting it when the first one lands points the routing away from the

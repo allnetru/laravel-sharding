@@ -316,6 +316,181 @@ class ShardRebalanceKeysTest extends TestCase
     }
 
     /**
+     * Two sources holding one identifier are refused before either moves.
+     *
+     * The occupancy preflight cannot see a clash the run creates itself: two
+     * source connections hold different rows under one identifier and both are
+     * sent to a third connection, empty when it was looked at. The first
+     * landed, the second found it — and without this check the first was
+     * already off its source and stranded. Found in review.
+     *
+     * The target has to be a connection that is not itself a source, or the
+     * first row never moves and the case cannot arise: that is what my first
+     * attempt at this test got wrong, and the mutation showed it.
+     *
+     * @return void
+     */
+    public function testTwoSourcesHoldingOneIdentifierAreRefused(): void
+    {
+        config([
+            'database.connections.shard_3' => ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => ''],
+        ]);
+
+        Schema::connection('shard_3')->create('grants', function (Blueprint $table): void {
+            $table->unsignedBigInteger('id')->primary();
+            $table->unsignedBigInteger('user_id');
+            $table->string('role');
+            $table->boolean('is_replica')->default(false);
+        });
+
+        DB::connection('shard_1')->table('grants')->insert([
+            'id' => 1,
+            'user_id' => 1,
+            'role' => 'from one',
+            'is_replica' => false,
+        ]);
+        DB::connection('shard_2')->table('grants')->insert([
+            'id' => 1,
+            'user_id' => 2,
+            'role' => 'from two',
+            'is_replica' => false,
+        ]);
+
+        try {
+            $this->strategy()->rebalance('grants', 'user_id', 'id', null, 'shard_3', null, null, [
+                'connections' => config('sharding.connections'),
+                'table' => 'grants',
+            ]);
+
+            $this->fail('the run went ahead over two rows sharing an identifier');
+        } catch (RebalanceIncomplete $e) {
+            $this->assertSame(0, $e->moved, 'a row was moved before the clash was found');
+        }
+
+        $this->assertSame(
+            'from one',
+            DB::connection('shard_1')->table('grants')->where('id', 1)->value('role'),
+        );
+        $this->assertSame(
+            'from two',
+            DB::connection('shard_2')->table('grants')->where('id', 1)->value('role'),
+        );
+        $this->assertSame(0, DB::connection('shard_3')->table('grants')->count(), 'a row reached the target');
+    }
+
+    /**
+     * A replica sharing its primary's key is not read as a clash.
+     *
+     * The normal state of a replicated row: the copy carries the same primary
+     * key on another connection. Counting it would refuse every rebalance of a
+     * replicated table, so the shared-key check looks at primaries only — on
+     * both sides.
+     *
+     * The fixture has to configure the replica for this to mean anything. With
+     * `replica_count` at zero a replica row is a state the package cannot
+     * produce, and the run then legitimately treats it as a stray copy — which
+     * is what my first attempt at this test measured.
+     *
+     * @return void
+     */
+    public function testAReplicaSharingItsPrimarysKeyIsNotAClash(): void
+    {
+        config(['sharding.tables.grants.replica_count' => 1]);
+        app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
+
+        /*
+        | A key whose primary lands on the *first* connection of the list, so
+        | its replica sits on a later one. The pairwise check only looks
+        | forward, so that orientation is the one where the replica can be
+        | mistaken for a clash — with the other orientation the walk skips the
+        | replica and the pair is never examined. My first attempt at this test
+        | took whatever key 1 gave and measured nothing, which the mutation
+        | showed.
+        */
+        $userId = null;
+        $manager = app(ShardingManager::class);
+
+        for ($candidate = 1; $candidate <= 50; $candidate++) {
+            if (($manager->connectionFor('grants', $candidate)[0] ?? null) === 'shard_1') {
+                $userId = $candidate;
+
+                break;
+            }
+        }
+
+        $this->assertNotNull($userId, 'no key of the first fifty lands on the first connection');
+
+        $placement = $manager->connectionFor('grants', $userId);
+
+        $this->assertCount(2, $placement, 'the replica was not configured');
+
+        [$primary, $replica] = $placement;
+
+        $row = ['id' => 1, 'user_id' => $userId, 'role' => 'one', 'is_replica' => false];
+
+        // both copies exactly where this key says they belong
+        DB::connection($primary)->table('grants')->insert($row);
+        DB::connection($replica)->table('grants')->insert(array_merge($row, ['is_replica' => true]));
+
+        $moved = $this->strategy()->rebalance('grants', 'user_id', 'id', null, null, null, null, [
+            'connections' => config('sharding.connections'),
+            'table' => 'grants',
+            'replica_count' => 1,
+        ]);
+
+        $this->assertSame(0, $moved, 'nothing needed moving');
+        $this->assertNotNull(
+            DB::connection($replica)->table('grants')->where('id', 1)->first(),
+            'the replica was disturbed',
+        );
+    }
+
+    /**
+     * With an explicit target, the connections the key names keep their copy.
+     *
+     * `placementFor()` answers with the explicit target alone, so the
+     * retention rule derived from it deleted the old primary — while the
+     * strategy's own `rowMoved()` promotes that primary into the replica list,
+     * leaving metadata advertising a replica on a connection the row had just
+     * been deleted from. Found in review.
+     *
+     * @return void
+     */
+    public function testWithAnExplicitTargetTheOldPrimaryBecomesTheReplica(): void
+    {
+        config(['sharding.tables.grants.replica_count' => 1]);
+        app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
+
+        $placement = app(ShardingManager::class)->connectionFor('grants', 1);
+
+        $this->assertCount(2, $placement, 'the replica was not configured');
+
+        [$primary, $replica] = $placement;
+
+        DB::connection($primary)->table('grants')->insert([
+            'id' => 1,
+            'user_id' => 1,
+            'role' => 'one',
+            'is_replica' => false,
+        ]);
+
+        // the operator moves the row onto the connection its replica lives on
+        $this->strategy()->rebalance('grants', 'user_id', 'id', $primary, $replica, null, null, [
+            'connections' => config('sharding.connections'),
+            'table' => 'grants',
+            'replica_count' => 1,
+        ]);
+
+        $arrived = DB::connection($replica)->table('grants')->where('id', 1)->first();
+        $left = DB::connection($primary)->table('grants')->where('id', 1)->first();
+
+        $this->assertNotNull($arrived);
+        $this->assertEmpty($arrived->is_replica, 'the row did not arrive as the primary');
+        $this->assertNotNull($left, 'the copy the metadata still advertises was deleted');
+        $this->assertNotEmpty($left->is_replica, 'the old primary is still claiming to be the row');
+    }
+
+    /**
      * A strategy using the trait, routing through the manager.
      *
      * @return Strategy
