@@ -63,7 +63,7 @@ class DbHashRangeStrategyTest extends TestCase
     {
         $strategy = new DbHashRangeStrategy();
 
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('No table scope provided for sharding.');
 
         $strategy->determine(1, [
@@ -199,7 +199,7 @@ class DbHashRangeStrategyTest extends TestCase
 
     public function testABoundedMoveByTheRoutingIsNotRefusedUpFront(): void
     {
-        $strategy = new class () extends DbHashRangeStrategy {
+        $strategy = new class() extends DbHashRangeStrategy {
             public bool $reached = false;
 
             protected function scannable(\Allnetru\Sharding\ShardingManager $manager, string $table): array

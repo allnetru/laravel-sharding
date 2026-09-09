@@ -112,7 +112,7 @@ trait Rebalanceable
         $failed = 0;
 
         foreach ($tables as $table) {
-            [$arrived, $left] = $this->moveRows($manager, $table, $walked, $to, $start, $end, $chunk, $config);
+            [$arrived, $left] = $this->moveRows($manager, $table, $walked, $to, $start, $end, $chunk);
 
             $moved += $arrived;
             $failed += $left;
@@ -294,7 +294,6 @@ trait Rebalanceable
      * @param int|null $start
      * @param int|null $end
      * @param int $chunk
-     * @param array<string, mixed> $config
      * @return array{0: int, 1: int} How many arrived, and how many did not.
      */
     protected function moveRows(
@@ -305,13 +304,12 @@ trait Rebalanceable
         ?int $start,
         ?int $end,
         int $chunk,
-        array $config,
     ): array {
         $moved = 0;
         $failed = 0;
 
         foreach ($walked as $connection) {
-            $this->walkRows($table, $connection, $start, $end, $chunk, function (object $row) use ($manager, $table, $connection, $to, $config, &$moved, &$failed): void {
+            $this->walkRows($table, $connection, $start, $end, $chunk, function (object $row) use ($manager, $table, $connection, $to, &$moved, &$failed): void {
                 $placement = $this->placementFor($manager, $table, $to, $row);
                 $target = $placement[0];
 
