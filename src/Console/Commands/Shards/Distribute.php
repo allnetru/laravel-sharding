@@ -72,68 +72,41 @@ class Distribute extends Command
         $dryRun = (bool) $this->option('dry-run');
         $chunk = max(1, (int) $this->option('chunk'));
 
+        $plan = $this->plan($manager, $foreignKeyDetector);
+
+        if ($plan === null) {
+            return self::FAILURE;
+        }
+
         $moved = 0;
         $misplaced = 0;
+        $collisions = 0;
         $swept = [];
         $groups = [];
 
-        foreach ((array) $this->argument('model') as $class) {
-            $model = $this->resolveModel((string) $class);
+        foreach ($plan as $step) {
+            $swept[$step['table']] = true;
 
-            if (!$model) {
-                return self::FAILURE;
+            if ($step['group'] !== null) {
+                $groups[$step['group']] = true;
             }
 
-            if (!method_exists($model, 'getShardKey')) {
-                $this->error($model::class . ' is not shardable: it does not use the Shardable trait.');
+            $this->info("Sweeping {$step['table']} by {$step['key']}...");
 
-                return self::FAILURE;
-            }
-
-            $table = $model->getTable();
-            $key = $model->getShardKey();
-            // identity is the model's own primary key, whatever it is called:
-            // paging and deleting by a hardcoded `id` breaks every model that
-            // names its key something else
-            $rowKey = $model->getKeyName();
-            $connections = array_keys((array) $manager->connectionsFor($model));
-
-            if ($connections === []) {
-                $this->error('No shard connections are configured.');
-
-                return self::FAILURE;
-            }
-
-            $group = $manager->groupFor($model);
-
-            if ($group !== null) {
-                $groups[$group] = true;
-            }
-
-            $swept[$table] = true;
-            $this->info("Sweeping {$table} by {$key}...");
-
-            foreach ($connections as $source) {
-                if (!Schema::connection($source)->hasTable($table)) {
-                    continue;
-                }
-
-                if ($foreignKeyDetector->hasForeignKeys($source, $table)) {
-                    $this->error("Foreign key constraints detected on {$source}.{$table}. Drop them before sharding.");
-
-                    return self::FAILURE;
-                }
-
-                if (!Schema::connection($source)->hasColumn($table, $key)) {
-                    $this->warn("Skipping {$table} on {$source}: it has no {$key} column.");
-
-                    continue;
-                }
-
-                [$found, $carried] = $this->sweep($manager, $table, $key, $rowKey, $source, $chunk, $dryRun);
+            foreach ($step['sources'] as $source) {
+                [$found, $carried, $clashed] = $this->sweep(
+                    $manager,
+                    $step['table'],
+                    $step['key'],
+                    $step['rowKey'],
+                    $source,
+                    $chunk,
+                    $dryRun,
+                );
 
                 $misplaced += $found;
                 $moved += $carried;
+                $collisions += $clashed;
             }
         }
 
@@ -147,7 +120,101 @@ class Distribute extends Command
 
         $this->info("Moved {$moved} row(s) to the shard their key names.");
 
+        if ($collisions > 0) {
+            $this->error(
+                "Left in place: {$collisions} row(s) whose primary key is already taken on the target by a "
+                . 'different row. Both copies are kept; reconcile them by hand and run the command again.',
+            );
+
+            return self::FAILURE;
+        }
+
         return self::SUCCESS;
+    }
+
+    /**
+     * Work out every sweep before the first row moves.
+     *
+     * Resolving the models as the sweeps run means a name misspelled in the
+     * fourth argument is discovered after the first three tables have already
+     * been rewritten, which for a colocation group leaves exactly the state
+     * this command exists to prevent: part of the group agreeing about where a
+     * key lives and part of it not. The early return also skipped
+     * reportTablesLeft(), so nothing said which tables were left behind.
+     *
+     * Everything that can refuse the run is therefore checked here — the class
+     * exists, it is shardable, it has connections, and none of the tables it
+     * lives in carries a foreign key — and the sweeps start only once all of
+     * it has passed.
+     *
+     * @param ShardingManager $manager
+     * @param ForeignKeyConstraintDetector $foreignKeyDetector
+     * @return list<array{table: string, key: string, rowKey: string, group: string|null, sources: list<string>}>|null
+     *         The sweeps to run, or null when something refused the run.
+     */
+    protected function plan(ShardingManager $manager, ForeignKeyConstraintDetector $foreignKeyDetector): ?array
+    {
+        $plan = [];
+
+        foreach ((array) $this->argument('model') as $class) {
+            $model = $this->resolveModel((string) $class);
+
+            if (!$model) {
+                return null;
+            }
+
+            if (!method_exists($model, 'getShardKey')) {
+                $this->error($model::class . ' is not shardable: it does not use the Shardable trait.');
+
+                return null;
+            }
+
+            $table = $model->getTable();
+            $key = $model->getShardKey();
+            // identity is the model's own primary key, whatever it is called:
+            // paging and deleting by a hardcoded `id` breaks every model that
+            // names its key something else
+            $rowKey = $model->getKeyName();
+            $connections = array_keys((array) $manager->connectionsFor($model));
+
+            if ($connections === []) {
+                $this->error('No shard connections are configured.');
+
+                return null;
+            }
+
+            $sources = [];
+
+            foreach ($connections as $source) {
+                if (!Schema::connection($source)->hasTable($table)) {
+                    continue;
+                }
+
+                if ($foreignKeyDetector->hasForeignKeys($source, $table)) {
+                    $this->error("Foreign key constraints detected on {$source}.{$table}. Drop them before sharding.");
+
+                    return null;
+                }
+
+                if (!Schema::connection($source)->hasColumn($table, $key)) {
+                    $this->warn("Skipping {$table} on {$source}: it has no {$key} column.");
+
+                    continue;
+                }
+
+                $sources[] = $source;
+            }
+
+            $plan[] = [
+                'table' => $table,
+                'key' => $key,
+                'rowKey' => $rowKey,
+                'group' => $manager->groupFor($model),
+                'sources' => $sources,
+            ];
+        }
+
+        return $plan;
     }
 
     /**
@@ -197,7 +264,8 @@ class Distribute extends Command
      * @param string $source The connection being swept.
      * @param int $chunk
      * @param bool $dryRun
-     * @return array{0: int, 1: int} How many were misplaced, and how many moved.
+     * @return array{0: int, 1: int, 2: int} How many were misplaced, how many moved,
+     *         and how many were left alone because the key was already taken there.
      */
     protected function sweep(
         ShardingManager $manager,
@@ -210,6 +278,7 @@ class Distribute extends Command
     ): array {
         $misplaced = 0;
         $moved = 0;
+        $collisions = 0;
         $after = null;
 
         do {
@@ -242,7 +311,13 @@ class Distribute extends Command
                     continue;
                 }
 
-                $target = $manager->connectionFor($table, $value)[0] ?? null;
+                /*
+                | The whole placement and not only its head: the tail names the
+                | connections this key's replicas belong on, and the source may
+                | be one of them.
+                */
+                $placement = array_values((array) $manager->connectionFor($table, $value));
+                $target = $placement[0] ?? null;
 
                 if ($target === null || $target === $source) {
                     continue;
@@ -254,20 +329,28 @@ class Distribute extends Command
                     continue;
                 }
 
-                $this->carry($table, $rowKey, $attributes, $source, $target);
+                if ($this->carry($table, $rowKey, $attributes, $source, $placement)) {
+                    $moved++;
 
-                $moved++;
+                    continue;
+                }
+
+                $collisions++;
+                $this->warn(
+                    "{$table}.{$rowKey} {$attributes[$rowKey]} is already taken on {$target} by a different row; "
+                    . "the copy on {$source} is left where it is.",
+                );
             }
         } while ($rows->count() === $chunk);
 
-        return [$misplaced, $moved];
+        return [$misplaced, $moved, $collisions];
     }
 
     /**
      * Carry one row from where it is to where its key says it belongs.
      *
-     * The target can already hold that primary key, and for two reasons that
-     * both have to be handled rather than crashed on.
+     * The target can already hold that primary key, and for three reasons that
+     * each need a different answer rather than a crash.
      *
      * **A replica copy of the same row.** With replication on — and the
      * default is one replica — the copy of a row frequently sits on exactly
@@ -278,18 +361,37 @@ class Distribute extends Command
      *
      * **A previous run interrupted between the write and the delete.** The
      * documented recovery is to run the command again, and that only works if
-     * finding the row already there is a state rather than an error. The
-     * source copy is removed and the count moves on.
+     * finding the row already there is a state rather than an error.
+     *
+     * **A different row that happens to share the identifier.** This is the
+     * one case where nothing may be thrown away. It is what adopting sharding
+     * over databases that counted their own identifiers looks like, and the
+     * two rows are both real data — so the primary key alone does not settle
+     * that the row on the target is the row in hand. The attributes have to
+     * agree as well, and when they do not the source copy stays where it is
+     * and the run reports it. A repair tool that silently drops one of two
+     * conflicting rows is worse than one that stops.
+     *
+     * **What happens to the source copy** is the second half of the answer,
+     * and deleting it is only right when the source holds nothing this key
+     * needs. With replicas configured the source is frequently one of the
+     * connections this key's replicas belong on — with one replica and two
+     * shards it always is — and these are raw table writes, so no `created`
+     * hook rebuilds what a delete removes. The metadata would go on
+     * advertising a replica that no longer exists. So a source that is a
+     * replica connection for this key keeps the row and is marked as the
+     * replica it should have been all along.
      *
      * @param string $table
      * @param string $rowKey The primary key.
      * @param array<string, mixed> $attributes The row as it is on the source.
      * @param string $source
-     * @param string $target
-     * @return void
+     * @param list<string> $placement The connections this key belongs on, the primary first.
+     * @return bool Whether the row now lives where its key says it belongs.
      */
-    protected function carry(string $table, string $rowKey, array $attributes, string $source, string $target): void
+    protected function carry(string $table, string $rowKey, array $attributes, string $source, array $placement): bool
     {
+        $target = $placement[0];
         $id = $attributes[$rowKey] ?? null;
         $existing = DB::connection($target)->table($table)->where($rowKey, $id)->first();
 
@@ -297,22 +399,96 @@ class Distribute extends Command
             /*
             | Written before it is removed, and deliberately in that order.
             | Interrupted between the two this leaves the row on both shards,
-            | which the branch above corrects on a re-run. The other order
+            | which the branch below corrects on a re-run. The other order
             | loses the row.
             */
             DB::connection($target)->table($table)->insert($attributes);
-            DB::connection($source)->table($table)->where($rowKey, $id)->delete();
+        } elseif (!empty(((array) $existing)['is_replica'])) {
+            DB::connection($target)->table($table)->where($rowKey, $id)->update(
+                array_merge($attributes, ['is_replica' => false]),
+            );
+        } elseif (!$this->sameRow((array) $existing, $attributes)) {
+            return false;
+        }
+
+        $this->releaseSource($table, $rowKey, $id, $attributes, $source, array_slice($placement, 1));
+
+        return true;
+    }
+
+    /**
+     * Let go of the copy on the connection the row is leaving.
+     *
+     * @param string $table
+     * @param string $rowKey
+     * @param mixed $id
+     * @param array<string, mixed> $attributes The row as it is on the source.
+     * @param string $source
+     * @param list<string> $replicas The connections this key's replicas belong on.
+     * @return void
+     */
+    protected function releaseSource(
+        string $table,
+        string $rowKey,
+        mixed $id,
+        array $attributes,
+        string $source,
+        array $replicas,
+    ): void {
+        $row = DB::connection($source)->table($table)->where($rowKey, $id);
+
+        // a table with no such column cannot hold a replica at all, so there
+        // is nothing to demote it to
+        if (in_array($source, $replicas, true) && array_key_exists('is_replica', $attributes)) {
+            $row->update(['is_replica' => true]);
 
             return;
         }
 
-        if (!empty(((array) $existing)['is_replica'])) {
-            DB::connection($target)->table($table)->where($rowKey, $id)->update(
-                array_merge($attributes, ['is_replica' => false]),
-            );
+        $row->delete();
+    }
+
+    /**
+     * Whether two copies of a primary key hold the same row.
+     *
+     * Compared as strings because the two connections are two drivers'
+     * opinions about what a column reads back as, and leniently in exactly
+     * that respect only: a missing column, a differing null, or any differing
+     * value answers no. The comparison decides whether a row may be deleted,
+     * so it errs towards keeping both.
+     *
+     * `is_replica` is left out of it — which copy is primary is what is being
+     * decided, not evidence about which row this is.
+     *
+     * @param array<string, mixed> $target
+     * @param array<string, mixed> $source
+     * @return bool
+     */
+    protected function sameRow(array $target, array $source): bool
+    {
+        unset($target['is_replica'], $source['is_replica']);
+
+        if (array_keys($target) !== array_keys($source)) {
+            return false;
         }
 
-        DB::connection($source)->table($table)->where($rowKey, $id)->delete();
+        foreach ($source as $column => $value) {
+            $other = $target[$column];
+
+            if ($value === null || $other === null) {
+                if ($value !== $other) {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if ((string) $other !== (string) $value) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

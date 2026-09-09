@@ -21,8 +21,9 @@ use Illuminate\Support\Facades\Schema;
  *
  * It could not run at all on most applications either: it looked for
  * `App\Models\<Table>` for every table of the group, which fails for anything
- * that keeps its models elsewhere. Nothing needs a model per table: the shard
- * key of a group is the group's.
+ * that keeps its models elsewhere. So the command takes the models, one per
+ * table: the tables of a group share the value that decides their shard but
+ * not the column it is written in, and only the model knows its own.
  */
 class ShardDistributeTest extends TestCase
 {
@@ -46,6 +47,7 @@ class ShardDistributeTest extends TestCase
         foreach (['shard_1', 'shard_2'] as $connection) {
             Schema::connection($connection)->create('holders', function (Blueprint $table): void {
                 $table->unsignedBigInteger('id')->primary();
+                $table->string('name')->nullable();
                 $table->boolean('is_replica')->default(false);
             });
 
@@ -271,6 +273,92 @@ class ShardDistributeTest extends TestCase
 
         $this->assertSame(1, DB::connection($right)->table('oddities')->count(), 'it did not arrive');
         $this->assertSame(0, DB::connection($wrong)->table('oddities')->count(), 'it stayed behind');
+    }
+
+    /**
+     * With a replica configured, the source keeps the row as that replica.
+     *
+     * The source is frequently one of the connections the key's replicas
+     * belong on — with one replica and two shards it always is — and these are
+     * raw table writes, so no `created` hook rebuilds what a delete removes.
+     * Deleting it would leave the metadata advertising a replica that does not
+     * exist. Found in review.
+     *
+     * @return void
+     */
+    public function testTheSourceBecomesTheReplicaItShouldHaveBeen(): void
+    {
+        config(['sharding.tables.holders.replica_count' => 1]);
+        app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
+
+        $placement = app(ShardingManager::class)->connectionFor(new Holder(), 1);
+
+        $this->assertCount(2, $placement, 'the replica was not configured');
+
+        [$right, $wrong] = [$placement[0], $placement[1]];
+
+        DB::connection($wrong)->table('holders')->insert(['id' => 1, 'is_replica' => false]);
+
+        $this->artisan('shards:distribute', ['model' => [Holder::class]])->assertSuccessful();
+
+        $primary = DB::connection($right)->table('holders')->where('id', 1)->first();
+        $replica = DB::connection($wrong)->table('holders')->where('id', 1)->first();
+
+        $this->assertNotNull($primary);
+        $this->assertEmpty($primary->is_replica, 'the primary did not arrive as the primary');
+        $this->assertNotNull($replica, 'the replica this key needs was deleted');
+        $this->assertNotEmpty($replica->is_replica, 'the copy left behind is still claiming to be primary');
+    }
+
+    /**
+     * A different row that happens to share the identifier is not destroyed.
+     *
+     * What adopting sharding over databases that counted their own identifiers
+     * looks like. Both rows are real data, so the primary key alone does not
+     * settle that the row on the target is the row in hand — and a repair tool
+     * that silently drops one of the two is worse than one that stops. Found
+     * in review.
+     *
+     * @return void
+     */
+    public function testADifferentRowSharingTheIdentifierIsKept(): void
+    {
+        [$right, $wrong] = $this->shardsFor(1);
+
+        DB::connection($wrong)->table('holders')->insert(['id' => 1, 'name' => 'mine', 'is_replica' => false]);
+        DB::connection($right)->table('holders')->insert(['id' => 1, 'name' => 'theirs', 'is_replica' => false]);
+
+        $this->artisan('shards:distribute', ['model' => [Holder::class]])->assertFailed();
+
+        $this->assertSame('mine', DB::connection($wrong)->table('holders')->where('id', 1)->value('name'));
+        $this->assertSame('theirs', DB::connection($right)->table('holders')->where('id', 1)->value('name'));
+    }
+
+    /**
+     * A model that cannot be resolved stops the run before anything moves.
+     *
+     * Validating as the sweeps go means a name misspelled in the second
+     * argument is found after the first table has already been rewritten,
+     * which for a colocation group leaves half of it agreeing about where a
+     * key lives and half of it not — the state this command exists to
+     * prevent. Found in review.
+     *
+     * @return void
+     */
+    public function testOneUnresolvableModelMovesNothingAtAll(): void
+    {
+        [, $wrong] = $this->shardsFor(1);
+
+        DB::connection($wrong)->table('holders')->insert(['id' => 1, 'is_replica' => false]);
+
+        $this->artisan('shards:distribute', ['model' => [Holder::class, 'App\\Nonsense\\Missing']])
+            ->assertFailed();
+
+        $this->assertSame(
+            1,
+            DB::connection($wrong)->table('holders')->count(),
+            'the first table was swept before the second model was even resolved',
+        );
     }
 
     /**
