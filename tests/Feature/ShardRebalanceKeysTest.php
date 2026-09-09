@@ -71,7 +71,123 @@ class ShardRebalanceKeysTest extends TestCase
             ]);
         }
 
-        $strategy = new class() implements Strategy {
+        $moved = $this->strategy()->rebalance('grants', 'user_id', 'id', $source, null, null, null, [
+            'connections' => config('sharding.connections'),
+            'table' => 'grants',
+        ]);
+
+        $this->assertSame(3, $moved, 'not every row was carried');
+
+        $this->assertSame(
+            3,
+            DB::connection($target)->table('grants')->where('user_id', $userId)->count(),
+            'rows were destroyed instead of moved',
+        );
+
+        $this->assertSame(
+            ['role-1', 'role-2', 'role-3'],
+            DB::connection($target)->table('grants')->orderBy('id')->pluck('role')->all(),
+            'the rows arrived, but not as themselves',
+        );
+
+        $this->assertSame(0, DB::connection($source)->table('grants')->count());
+    }
+
+    /**
+     * A different row holding the same identifier is refused, not overwritten.
+     *
+     * Two shards that allocated their identifiers independently hold different
+     * rows under the same number, and both are real data. Before the lookup
+     * went by the row key this could not happen — it asked by the shard key,
+     * missed such an occupant, and the insert failed on the unique index and
+     * rolled back — so the fix that split the keys introduced it. Found in
+     * review.
+     *
+     * @return void
+     */
+    public function testADifferentRowHoldingTheSameIdentifierIsRefused(): void
+    {
+        $target = app(ShardingManager::class)->connectionFor('grants', 1)[0];
+        $source = $target === 'shard_1' ? 'shard_2' : 'shard_1';
+
+        DB::connection($source)->table('grants')->insert([
+            'id' => 1,
+            'user_id' => 1,
+            'role' => 'mine',
+            'is_replica' => false,
+        ]);
+
+        // the same identifier, a different row, and a shard key that belongs
+        // right where it already is
+        DB::connection($target)->table('grants')->insert([
+            'id' => 1,
+            'user_id' => 99,
+            'role' => 'somebody else',
+            'is_replica' => false,
+        ]);
+
+        $moved = $this->strategy()->rebalance('grants', 'user_id', 'id', $source, null, null, null, [
+            'connections' => config('sharding.connections'),
+            'table' => 'grants',
+        ]);
+
+        $this->assertSame(0, $moved, 'the row was reported as moved');
+        $this->assertSame(
+            'mine',
+            DB::connection($source)->table('grants')->where('id', 1)->value('role'),
+            'the source copy was let go of',
+        );
+        $this->assertSame(
+            'somebody else',
+            DB::connection($target)->table('grants')->where('id', 1)->value('role'),
+            'a different row was overwritten',
+        );
+    }
+
+    /**
+     * The copy left behind is deleted, not silently kept as a replica.
+     *
+     * When the target already held the row — a run interrupted between the two
+     * commits — the source was marked `is_replica = true` whatever connection
+     * it was. With no replicas configured that leaves a copy nothing
+     * advertises, hidden by the `is_replica = false` scope, so the table
+     * carries a duplicate that nothing can see and nothing rebuilds. Found in
+     * review.
+     *
+     * @return void
+     */
+    public function testTheCopyLeftBehindIsNotKeptAsAReplicaNobodyAskedFor(): void
+    {
+        $target = app(ShardingManager::class)->connectionFor('grants', 1)[0];
+        $source = $target === 'shard_1' ? 'shard_2' : 'shard_1';
+
+        $row = ['id' => 1, 'user_id' => 1, 'role' => 'one', 'is_replica' => false];
+
+        // exactly what an interruption between the two commits leaves behind
+        DB::connection($source)->table('grants')->insert($row);
+        DB::connection($target)->table('grants')->insert($row);
+
+        $moved = $this->strategy()->rebalance('grants', 'user_id', 'id', $source, null, null, null, [
+            'connections' => config('sharding.connections'),
+            'table' => 'grants',
+        ]);
+
+        $this->assertSame(1, $moved);
+        $this->assertSame(
+            0,
+            DB::connection($source)->table('grants')->count(),
+            'the source kept a copy this key has no replica connection for',
+        );
+    }
+
+    /**
+     * A strategy using the trait, routing through the manager.
+     *
+     * @return Strategy
+     */
+    protected function strategy(): Strategy
+    {
+        return new class() implements Strategy {
             use Rebalanceable;
 
             public function determine(mixed $key, array $config): array
@@ -92,26 +208,5 @@ class ShardRebalanceKeysTest extends TestCase
             {
             }
         };
-
-        $moved = $strategy->rebalance('grants', 'user_id', 'id', $source, null, null, null, [
-            'connections' => config('sharding.connections'),
-            'table' => 'grants',
-        ]);
-
-        $this->assertSame(3, $moved, 'not every row was carried');
-
-        $this->assertSame(
-            3,
-            DB::connection($target)->table('grants')->where('user_id', $userId)->count(),
-            'rows were destroyed instead of moved',
-        );
-
-        $this->assertSame(
-            ['role-1', 'role-2', 'role-3'],
-            DB::connection($target)->table('grants')->orderBy('id')->pluck('role')->all(),
-            'the rows arrived, but not as themselves',
-        );
-
-        $this->assertSame(0, DB::connection($source)->table('grants')->count());
     }
 }

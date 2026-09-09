@@ -125,8 +125,14 @@ A table may override the generator via the `id_generator` option in its configur
 3. Move rows with the rebalance command:
 
    ```bash
-   php artisan shards:rebalance items --from=shard-1 --to=shard-10
+   php artisan shards:rebalance "App\Models\Item" --from=shard-1 --to=shard-10
    ```
+
+   **The argument is the model class, not the table name.** The table name
+   alone cannot find the model on an application that keeps its models outside
+   `App\Models`, and only the model knows which column its own shard key lives
+   in — which for a colocated table is not the primary key. A short name is
+   still resolved against `App\Models` for anyone it worked for before.
 
    Use `--start` and `--end` to limit the range. **They bound the shard key, not
    the primary key** — for a colocated table those are different columns, and

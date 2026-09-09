@@ -2,8 +2,10 @@
 
 namespace Allnetru\Sharding\Console\Commands\Shards;
 
+use Allnetru\Sharding\Console\Commands\Shards\Concerns\ResolvesShardModel;
 use Allnetru\Sharding\ShardingManager;
 use Allnetru\Sharding\Support\Database\ForeignKeyConstraintDetector;
+use Allnetru\Sharding\Support\RowComparison;
 use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
@@ -44,6 +46,8 @@ use Illuminate\Support\Facades\Schema;
  */
 class Distribute extends Command
 {
+    use ResolvesShardModel;
+
     /**
      * The name and signature of the console command.
      *
@@ -193,9 +197,34 @@ class Distribute extends Command
 
             $sources = [];
 
+            $underMigration = (array) config('sharding.migrations', []);
+
             foreach ($connections as $source) {
                 if (!Schema::connection($source)->hasTable($table)) {
-                    continue;
+                    /*
+                    | A shard listed in DB_SHARD_MIGRATIONS is one new writes
+                    | are told to avoid, so it may legitimately not have the
+                    | table yet and skipping it is right — `connectionFor()`
+                    | will not route anything there either.
+                    |
+                    | An active one is a different matter. Leaving it out of
+                    | the sources does not stop the routing from naming it as
+                    | a destination, so the run would move rows from the
+                    | earlier connections and then fail on a missing table
+                    | halfway — which is the partial repair the whole planning
+                    | pass exists to prevent.
+                    */
+                    if (array_key_exists($source, $underMigration)) {
+                        continue;
+                    }
+
+                    $this->error(
+                        "{$source} has no {$table} table, and it is not listed in DB_SHARD_MIGRATIONS. "
+                        . 'Rows would be routed to it and the run would stop halfway. Migrate it first, '
+                        . 'or exclude it while it is being prepared.',
+                    );
+
+                    return null;
                 }
 
                 if ($foreignKeyDetector->hasForeignKeys($source, $table)) {
@@ -468,7 +497,7 @@ class Distribute extends Command
     ): bool {
         $existing = DB::connection($connection)->table($table)->where($rowKey, $id)->first();
 
-        return $existing === null || $this->sameRow((array) $existing, $attributes);
+        return $existing === null || RowComparison::same((array) $existing, $attributes);
     }
 
     /**
@@ -539,75 +568,5 @@ class Distribute extends Command
         }
 
         $row->delete();
-    }
-
-    /**
-     * Whether two copies of a primary key hold the same row.
-     *
-     * Compared as strings because the two connections are two drivers'
-     * opinions about what a column reads back as, and leniently in exactly
-     * that respect only: a missing column, a differing null, or any differing
-     * value answers no. The comparison decides whether a row may be deleted,
-     * so it errs towards keeping both.
-     *
-     * `is_replica` is left out of it — which copy is primary is what is being
-     * decided, not evidence about which row this is.
-     *
-     * @param array<string, mixed> $target
-     * @param array<string, mixed> $source
-     * @return bool
-     */
-    protected function sameRow(array $target, array $source): bool
-    {
-        unset($target['is_replica'], $source['is_replica']);
-
-        if (array_keys($target) !== array_keys($source)) {
-            return false;
-        }
-
-        foreach ($source as $column => $value) {
-            $other = $target[$column];
-
-            if ($value === null || $other === null) {
-                if ($value !== $other) {
-                    return false;
-                }
-
-                continue;
-            }
-
-            if ((string) $other !== (string) $value) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * Resolve a model instance from the given class name.
-     *
-     * @param string $class
-     * @return Model|null
-     */
-    protected function resolveModel(string $class): ?Model
-    {
-        $modelClass = ltrim($class, '\\');
-
-        if (!class_exists($modelClass)) {
-            $fallback = app()->getNamespace() . 'Models\\' . $modelClass;
-
-            if (class_exists($fallback)) {
-                $modelClass = $fallback;
-            }
-        }
-
-        if (!class_exists($modelClass) || !is_subclass_of($modelClass, Model::class)) {
-            $this->error("Model {$modelClass} not found.");
-
-            return null;
-        }
-
-        return new $modelClass();
     }
 }

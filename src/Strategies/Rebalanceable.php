@@ -4,6 +4,7 @@ namespace Allnetru\Sharding\Strategies;
 
 use Allnetru\Sharding\Contracts\MetricServiceInterface;
 use Allnetru\Sharding\ShardingManager;
+use Allnetru\Sharding\Support\RowComparison;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -86,11 +87,51 @@ trait Rebalanceable
 
                     try {
                         $existing = $targetConn->table($table)->where($rowKey, $row->$rowKey)->first();
+
+                        /*
+                        | The primary key being taken on the target does not
+                        | make the row there this row: shards that allocated
+                        | their identifiers independently hold different rows
+                        | under the same number, and both are real data.
+                        | Until the lookup went by the row key this could not
+                        | arise — it asked by the shard key, missed such an
+                        | occupant, and the insert below failed on the unique
+                        | index and rolled back. Now it is refused explicitly.
+                        */
+                        if ($existing && !RowComparison::same((array) $existing, (array) $row)) {
+                            $targetConn->rollBack();
+                            $sourceConn->rollBack();
+
+                            Log::error('Refused to move a row onto a different row with the same key', [
+                                'table' => $table,
+                                'id' => $row->$rowKey,
+                                'from' => $connection,
+                                'to' => $target,
+                            ]);
+
+                            $failed++;
+
+                            continue;
+                        }
+
                         if ($existing) {
                             $targetConn->table($table)->where($rowKey, $row->$rowKey)->update(array_merge((array) $row, ['is_replica' => false]));
-                            $sourceConn->table($table)->where($rowKey, $row->$rowKey)->update(['is_replica' => true]);
                         } else {
                             $targetConn->table($table)->insert((array) $row);
+                        }
+
+                        /*
+                        | The copy left behind is kept only when this key's
+                        | replicas belong on that connection. Marking it a
+                        | replica anywhere else — which is what happened
+                        | whenever the target already held the row — leaves a
+                        | copy nothing advertises, hidden by the
+                        | `is_replica = false` scope, so the table carries a
+                        | duplicate that nothing can see and nothing rebuilds.
+                        */
+                        if (in_array($connection, array_slice($targetConnections, 1), true)) {
+                            $sourceConn->table($table)->where($rowKey, $row->$rowKey)->update(['is_replica' => true]);
+                        } else {
                             $sourceConn->table($table)->where($rowKey, $row->$rowKey)->delete();
                         }
 

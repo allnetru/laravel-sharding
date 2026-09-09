@@ -2,21 +2,37 @@
 
 namespace Allnetru\Sharding\Console\Commands\Shards;
 
+use Allnetru\Sharding\Console\Commands\Shards\Concerns\ResolvesShardModel;
+use Allnetru\Sharding\ShardingManager;
 use Illuminate\Console\Command;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Str;
 
 /**
  * Move records between shard connections.
+ *
+ * **Takes the model class rather than the table name**, for the two reasons
+ * `shards:distribute` takes it: the table name alone cannot find the model on
+ * any application that keeps its models outside `App\Models` — this command
+ * simply could not run there — and only the model knows which column its own
+ * shard key lives in, which for a colocated table is not the primary key.
+ *
+ * `--start` and `--end` bound the **shard key**, because that is what a slot
+ * is a range of. On a table keyed by `user_id` a range picks users and moves
+ * every row each of them has.
  */
 class Rebalance extends Command
 {
+    use ResolvesShardModel;
+
     /**
      * The name and signature of the console command.
      *
      * @var string
      */
-    protected $signature = 'shards:rebalance {table} {--from=} {--to=} {--start=} {--end=}';
+    protected $signature = 'shards:rebalance {model : The model class of the table to rebalance}
+        {--from=}
+        {--to=}
+        {--start=}
+        {--end=}';
 
     /**
      * The console command description.
@@ -32,29 +48,32 @@ class Rebalance extends Command
      */
     public function handle(): int
     {
-        $table = $this->argument('table');
+        $model = $this->resolveModel((string) $this->argument('model'));
+
+        if (!$model) {
+            return self::FAILURE;
+        }
+
+        $table = $model->getTable();
         $from = $this->option('from');
         $to = $this->option('to');
         $start = $this->option('start');
         $end = $this->option('end');
 
-        $config = config("sharding.tables.{$table}", []);
-        $strategyName = $config['strategy'] ?? config('sharding.default');
-        $strategyClass = config("sharding.strategies.{$strategyName}");
-
-        /** @var \Allnetru\Sharding\Strategies\Strategy $strategy */
-        $strategy = app($strategyClass);
-        $config['connections'] = $config['connections'] ?? (config('sharding.connections') ?? []);
-        $config['table'] = $table;
+        /*
+        | Asked of the manager rather than read out of the config, because a
+        | colocated child table only declares its group: its own entry has no
+        | strategy and no slot size, so reading it directly fell back to the
+        | default strategy and wrote the slot metadata under the child's name.
+        | The rows moved and keyed reads went on being routed to the shard the
+        | metadata still named. `strategyFor()` resolves the group's owner,
+        | which is where both the strategy and the slots live.
+        */
+        [$strategy, $config] = app(ShardingManager::class)->strategyFor($table);
 
         if (!$strategy->canRebalance()) {
             $this->error('Rebalancing is not supported for this strategy.');
 
-            return self::FAILURE;
-        }
-
-        $model = $this->resolveModelByTable($table);
-        if (!$model) {
             return self::FAILURE;
         }
 
@@ -88,24 +107,5 @@ class Rebalance extends Command
         $this->info("Moved {$moved} records.");
 
         return self::SUCCESS;
-    }
-
-    /**
-     * Resolve a model instance by table name.
-     *
-     * @param string $table
-     * @return Model|null
-     */
-    protected function resolveModelByTable(string $table): ?Model
-    {
-        $modelClass = app()->getNamespace() . 'Models\\' . Str::studly(Str::singular($table));
-
-        if (!class_exists($modelClass) || !is_subclass_of($modelClass, Model::class)) {
-            $this->error("Model for table {$table} not found.");
-
-            return null;
-        }
-
-        return new $modelClass();
     }
 }

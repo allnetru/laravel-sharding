@@ -475,6 +475,57 @@ class ShardDistributeTest extends TestCase
     }
 
     /**
+     * An active shard without the table stops the run before it starts.
+     *
+     * Leaving such a connection out of the sources does not stop the routing
+     * from naming it as a destination, so the run moved rows from the earlier
+     * connections and then failed on a missing table halfway — the partial
+     * repair the planning pass exists to prevent. A shard listed in
+     * `DB_SHARD_MIGRATIONS` is a different matter: new writes are told to avoid
+     * it, so it may legitimately not have the table yet. Found in review.
+     *
+     * @return void
+     */
+    public function testAnActiveShardWithoutTheTableIsRefused(): void
+    {
+        [, $wrong] = $this->shardsFor(1);
+
+        DB::connection($wrong)->table('holders')->insert(['id' => 1, 'is_replica' => false]);
+        Schema::connection('shard_2')->drop('holders');
+
+        $this->artisan('shards:distribute', ['model' => [Holder::class]])->assertFailed();
+
+        if ($wrong === 'shard_1') {
+            $this->assertSame(
+                1,
+                DB::connection('shard_1')->table('holders')->count(),
+                'rows were swept before the missing table was noticed',
+            );
+        }
+    }
+
+    /**
+     * A shard being prepared is skipped rather than refused.
+     *
+     * @return void
+     */
+    public function testAShardUnderMigrationWithoutTheTableIsSkipped(): void
+    {
+        config(['sharding.migrations' => ['shard_2' => true]]);
+        app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
+
+        Schema::connection('shard_2')->drop('holders');
+
+        // with shard_2 excluded from routing, every key names shard_1, so the
+        // row is already where it belongs and the run has nothing to do
+        DB::connection('shard_1')->table('holders')->insert(['id' => 1, 'is_replica' => false]);
+
+        $this->artisan('shards:distribute', ['model' => [Holder::class]])->assertSuccessful();
+
+        $this->assertSame(1, DB::connection('shard_1')->table('holders')->count());
+    }
+
+    /**
      * Three shards, one replica, and a connection this key does not name.
      *
      * The interesting topology: the source is neither the primary nor the
