@@ -179,9 +179,18 @@ answer slowly, it answers incompletely.
 | `whereIn('tenant_id', [5, 6])` | the shards those two keys name, up to 100 keys |
 | `where('tenant_id', 5)->where(fn ($q) => $q->where('a', 1)->orWhere('a', 2))` | one shard — the `or` is inside an ANDed group |
 | `where('tenant_id', 5)->orWhere('tenant_id', 6)` | every shard — the top level is not a conjunction |
+| `whereNot('tenant_id', 5)` | every shard — Laravel writes this as an equality with the boolean «and not», and it matches every *other* key |
+| `where('tenant_id', 5)->union(...)` | every shard — a union is a second predicate, and routing one means agreeing on the shards of every arm |
+| `where('tenant_id', 5)` on a model whose global scope adds a top-level `orWhere` | every shard — the scope is part of the predicate |
 | `where('tenant_id', '>', 5)` | every shard — not an equality |
 | `whereRaw('tenant_id = ?', [5])` | every shard — not read |
 | `join('other', ...)->where('other.tenant_id', 5)` | every shard — that column is not ours |
+
+Of the shards a key names, only the **primary** is read. A replica cannot
+answer any read in this package: every per-shard copy of a query carries an
+unconditional `is_replica = false`, so a query sent to a replica comes back
+empty by construction. Pinning to the primary therefore loses nothing, and
+reading the copies would cost a round trip for a certainty.
 
 `sharding.pin_by_key` turns it off. Do that while rebalancing:
 `shards:rebalance` moves rows and updates slots without atomicity between the
