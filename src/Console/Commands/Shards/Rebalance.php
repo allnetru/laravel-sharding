@@ -6,7 +6,6 @@ use Allnetru\Sharding\Console\Commands\Shards\Concerns\ResolvesShardModel;
 use Allnetru\Sharding\Exceptions\RebalanceIncomplete;
 use Allnetru\Sharding\ShardingManager;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Schema;
 
 /**
  * Move records between shard connections.
@@ -198,30 +197,5 @@ class Rebalance extends Command
         $this->info("Moved {$moved} records.");
 
         return self::SUCCESS;
-    }
-
-    /**
-     * The routing connections of this table that do not have it.
-     *
-     * @param ShardingManager $manager
-     * @param string $table
-     * @return list<string>
-     */
-    protected function connectionsWithoutTable(ShardingManager $manager, string $table): array
-    {
-        $migrating = (array) config('sharding.migrations', []);
-        $missing = [];
-
-        foreach (array_keys((array) $manager->connectionsFor($table)) as $connection) {
-            if (array_key_exists($connection, $migrating)) {
-                continue;
-            }
-
-            if (!Schema::connection($connection)->hasTable($table)) {
-                $missing[] = (string) $connection;
-            }
-        }
-
-        return $missing;
     }
 }

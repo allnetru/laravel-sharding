@@ -26,6 +26,59 @@ use Illuminate\Support\Facades\Schema;
 trait ResolvesShardModel
 {
     /**
+     * The connections a table routes to, leaving out those being prepared.
+     *
+     * `connectionsFor()` answers with everything configured, while
+     * `connectionFor()` — the one that routes — drops anything listed in
+     * `DB_SHARD_MIGRATIONS`. Both commands need the routing list rather than
+     * the configured one, and asking the question in one place keeps the two
+     * from drifting apart about what «active» means.
+     *
+     * @param ShardingManager $manager
+     * @param string $table
+     * @return list<string>
+     */
+    protected function routingConnections(ShardingManager $manager, string $table): array
+    {
+        $migrating = (array) config('sharding.migrations', []);
+        $connections = [];
+
+        foreach (array_keys((array) $manager->connectionsFor($table)) as $connection) {
+            if (array_key_exists($connection, $migrating)) {
+                continue;
+            }
+
+            $connections[] = (string) $connection;
+        }
+
+        return $connections;
+    }
+
+    /**
+     * Which of a table's routing connections have not got it.
+     *
+     * Skipping such a connection is not an option in either command: it stays
+     * in the routing either way, so rows are sent to it and the run dies
+     * partway.
+     *
+     * @param ShardingManager $manager
+     * @param string $table
+     * @return list<string>
+     */
+    protected function connectionsWithoutTable(ShardingManager $manager, string $table): array
+    {
+        $missing = [];
+
+        foreach ($this->routingConnections($manager, $table) as $connection) {
+            if (!Schema::connection($connection)->hasTable($table)) {
+                $missing[] = $connection;
+            }
+        }
+
+        return $missing;
+    }
+
+    /**
      * The tables of this table's colocation group that hold rows.
      *
      * Both commands need it, and for the same reason: the tables of a group
