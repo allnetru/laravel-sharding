@@ -136,7 +136,7 @@ class ShardBuilder extends EloquentBuilder
      */
     protected function shardKeyValues(string $shardKey, string $table): ?array
     {
-        $wheres = $this->getQuery()->wheres ?? [];
+        $wheres = $this->getQuery()->wheres;
 
         if ($wheres === []) {
             return null;

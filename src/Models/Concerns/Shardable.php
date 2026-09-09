@@ -77,7 +77,10 @@ trait Shardable
 
         // rebuilt on purpose: the query handed to us was aimed before the
         // line above knew where this row belongs
-        return parent::performInsert($this->newModelQuery());
+        /** @var Builder<static> $aimed */
+        $aimed = $this->newModelQuery();
+
+        return parent::performInsert($aimed);
     }
 
     /**
