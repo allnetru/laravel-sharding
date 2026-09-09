@@ -223,6 +223,28 @@ class Distribute extends Command
                     return null;
                 }
 
+                if (!Schema::connection($source)->hasColumn($table, $rowKey)) {
+                    /*
+                    | The column the sweep orders, pages, looks up and deletes
+                    | by. A model with a primary key of its own migrating into
+                    | existence gives the same halfway failure as a missing
+                    | shard key, one column over.
+                    */
+                    if (array_key_exists($source, $underMigration)) {
+                        $this->warn("Skipping {$table} on {$source}: it has no {$rowKey} column.");
+
+                        continue;
+                    }
+
+                    $this->error(
+                        "{$source}.{$table} has no {$rowKey} column, which is what the sweep pages and "
+                        . "deletes by, and {$source} is not listed in DB_SHARD_MIGRATIONS. Migrate it "
+                        . 'first, or exclude it while it is being prepared.',
+                    );
+
+                    return null;
+                }
+
                 if (!Schema::connection($source)->hasColumn($table, $key)) {
                     /*
                     | The same argument as the missing table, one column down.

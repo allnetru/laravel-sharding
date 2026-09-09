@@ -621,6 +621,39 @@ class ShardDistributeTest extends TestCase
     }
 
     /**
+     * An active shard missing the row-key column is refused as well.
+     *
+     * The sweep orders, pages, looks up and deletes by it, so a model whose
+     * primary key is migrating into existence gave the same halfway failure as
+     * a missing shard key, one column over. Found in review.
+     *
+     * @return void
+     */
+    public function testAnActiveShardWithoutTheRowKeyColumnIsRefused(): void
+    {
+        foreach (['shard_1', 'shard_2'] as $connection) {
+            Schema::connection($connection)->create('oddities', function (Blueprint $table) use ($connection): void {
+                // the column the model calls its key exists on one shard only,
+                // which is what a migration halfway through looks like
+                if ($connection === 'shard_1') {
+                    $table->unsignedBigInteger('oddity_key')->primary();
+                } else {
+                    $table->unsignedBigInteger('id')->primary();
+                }
+
+                $table->unsignedBigInteger('holder_id');
+                $table->boolean('is_replica')->default(false);
+            });
+        }
+
+        config(['sharding.tables.oddities' => ['strategy' => 'hash', 'replica_count' => 0, 'group' => 'holder_data']]);
+        config(['sharding.groups.holder_data' => ['holders', 'holder_notes', 'oddities']]);
+        app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
+
+        $this->artisan('shards:distribute', ['model' => [Oddity::class]])->assertFailed();
+    }
+
+    /**
      * A shard being prepared is skipped rather than refused.
      *
      * @return void

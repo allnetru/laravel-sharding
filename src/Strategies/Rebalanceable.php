@@ -220,13 +220,9 @@ trait Rebalanceable
         | range handed over while any row is, is what makes rows unreachable.
         */
         if ($failed === 0) {
-            if ($this instanceof RowMoveAware) {
-                foreach ($redirects as [$key, $target]) {
-                    $this->rowMoved($key, $target, $config);
-                }
-            }
+            $failed += $this->handOverRouting($manager, $table, $shardKey, $rowKey, $redirects, $config);
 
-            if ($this instanceof SupportsAfterRebalance) {
+            if ($failed === 0 && $this instanceof SupportsAfterRebalance) {
                 $this->afterRebalance($table, $shardKey, $from, $to, $start, $end, $config);
             }
         }
@@ -254,6 +250,137 @@ trait Rebalanceable
         }
 
         return $moved;
+    }
+
+    /**
+     * Hand each key's routing over, then make the placement it names real.
+     *
+     * **This is the one step that cannot be undone by re-running.** Everything
+     * before it is idempotent: a row already on the shard its key names is
+     * skipped, and a destination already holding this row is accepted. But by
+     * the time the routing is handed over the source copies are gone, so a
+     * `rowMoved()` that throws — a Redis or metadata-database outage during the
+     * window — leaves the rows on the new connection and the routing pointing
+     * at the old one, and a second run has nothing left to notice.
+     *
+     * There is no ordering that avoids this. Handing the routing over first
+     * makes reads miss rows that have not moved yet; releasing the sources
+     * afterwards leaves the row a primary on two connections at once, which a
+     * fan-out returns twice. So the routing is handed over last and the
+     * failure is made loud instead of silent: each key is retried once, and
+     * every key still unredirected is logged with the connection it should
+     * name, so the mapping can be replayed by hand. The count comes back as a
+     * failure, which stops `afterRebalance()` and raises
+     * `RebalanceIncomplete`.
+     *
+     * Then the placement is materialised. The strategy decides what the
+     * replicas of a moved key become — `RedisStrategy` and
+     * `DbHashRangeStrategy` promote the old primary when the target used to be
+     * one of its replicas, and derive a fresh list from the connection order
+     * when it was not — and in the second case nothing in the move had written
+     * the row there. The metadata advertised a replica holding nothing. So
+     * once the routing says where the copies belong, they are put there.
+     *
+     * @param ShardingManager $manager
+     * @param string $table
+     * @param string $shardKey
+     * @param string $rowKey
+     * @param array<string, array{0: mixed, 1: string}> $redirects
+     * @param array<string, mixed> $config
+     * @return int How many keys were left unredirected.
+     */
+    protected function handOverRouting(
+        ShardingManager $manager,
+        string $table,
+        string $shardKey,
+        string $rowKey,
+        array $redirects,
+        array $config,
+    ): int {
+        if (!$this instanceof RowMoveAware) {
+            return 0;
+        }
+
+        $stranded = 0;
+
+        foreach ($redirects as [$key, $target]) {
+            try {
+                $this->rowMoved($key, $target, $config);
+            } catch (\Throwable $first) {
+                try {
+                    $this->rowMoved($key, $target, $config);
+                } catch (\Throwable $e) {
+                    Log::error('Rows moved but their routing was not updated; replay this mapping by hand', [
+                        'table' => $table,
+                        'shard_key' => $key,
+                        'connection' => $target,
+                        'exception' => $e,
+                    ]);
+
+                    $stranded++;
+
+                    continue;
+                }
+            }
+
+            $this->materialise($manager, $table, $shardKey, $rowKey, $key, $target);
+        }
+
+        return $stranded;
+    }
+
+    /**
+     * Put a copy of the key's rows on every connection its placement names.
+     *
+     * @param ShardingManager $manager
+     * @param string $table
+     * @param string $shardKey
+     * @param string $rowKey
+     * @param mixed $key
+     * @param string $primary
+     * @return void
+     */
+    protected function materialise(
+        ShardingManager $manager,
+        string $table,
+        string $shardKey,
+        string $rowKey,
+        mixed $key,
+        string $primary,
+    ): void {
+        $replicas = array_slice(array_values((array) $manager->connectionFor($table, $key)), 1);
+
+        if ($replicas === []) {
+            return;
+        }
+
+        $rows = DB::connection($primary)->table($table)->where($shardKey, $key)->get();
+
+        foreach ($rows as $row) {
+            $attributes = (array) $row;
+
+            // a table without the column cannot say which copy is the row, so
+            // it cannot hold replicas at all
+            if (!array_key_exists('is_replica', $attributes)) {
+                return;
+            }
+
+            if (!empty($attributes['is_replica'])) {
+                continue;
+            }
+
+            foreach ($replicas as $replica) {
+                $copy = DB::connection($replica)->table($table)->where($rowKey, $row->$rowKey);
+
+                if ($copy->exists()) {
+                    continue;
+                }
+
+                DB::connection($replica)->table($table)->insert(
+                    array_merge($attributes, ['is_replica' => true]),
+                );
+            }
+        }
     }
 
     /**

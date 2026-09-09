@@ -125,6 +125,25 @@ not per row: on a colocated one-to-many table one key covers several rows, so
 redirecting it when the first one lands points the routing away from the
 siblings still on the source.
 
+**Once the routing is handed over, the placement it names is written.** The
+strategy decides what the replicas of a moved key become, and where it picks a
+connection the move never wrote to — an explicit `--to` outside the key's old
+placement — the metadata used to advertise a replica holding nothing. The copies
+are put there now.
+
+**The handoff is the one step a re-run cannot repeat.** Everything before it is
+idempotent: a row already on the shard its key names is skipped, a destination
+already holding this row is accepted. By the handoff the source copies are gone,
+so a `rowMoved()` that throws — a Redis or metadata-database outage in that
+window — leaves the rows on the new connection and the routing pointing at the
+old one, with nothing left for a second run to notice. There is no ordering that
+avoids it: handing the routing over first makes reads miss rows that have not
+moved, releasing the sources afterwards leaves the row a primary on two
+connections at once and a fan-out returns it twice. So each key is retried once
+and every key still unredirected is logged with the connection it should name,
+so the mapping can be replayed by hand; the run then raises
+`RebalanceIncomplete` rather than reporting success.
+
 **Run a rebalance with `SHARDING_PIN_BY_KEY=false`.** A pinned read finds a row
 only where its key currently says it is, and for the length of the move that is
 not where every row is. Unpinned, a read fans out and finds a row wherever it
