@@ -91,6 +91,26 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Pinning A Query By Its Own Shard Key
+    |--------------------------------------------------------------------------
+    |
+    | When a query's predicate is a conjunction that contains an equality on
+    | the shard key — `where('tenant_id', 5)` — the builder resolves that key
+    | and reads only the connections it lives on, instead of every shard. This
+    | is partition pruning: it changes how many connections are asked, never
+    | what the query returns, because no row on another shard can satisfy an
+    | AND that names the key.
+    |
+    | Turn it off while rebalancing. `shards:rebalance` moves rows and updates
+    | slots without atomicity between the two, so for the length of a move a
+    | row can sit on one connection while the slot names another. A fan-out
+    | finds it either way; a pinned read asks the connection the slot names and
+    | can miss it. That window is the one reason this exists as a switch.
+    */
+    'pin_by_key' => env('SHARDING_PIN_BY_KEY', true),
+
+    /*
+    |--------------------------------------------------------------------------
     | Coroutine Drivers
     |--------------------------------------------------------------------------
     |

@@ -157,6 +157,37 @@ These calls transparently span all shards defined for the target table.
 A query that names its shard key reads one shard. Anything else fans out, and
 the results are merged in the process by the same ordering the query asked for.
 
+**This sentence was aspirational until v0.4.0.** Nothing looked at a query at
+all: only `onShardConnection()` and the relation resolver narrowed anything, so
+`where('tenant_id', 5)` opened a cursor on every shard and merged. It is true
+now, and what makes it true is worth knowing, because it decides which of your
+queries get it.
+
+The rule is a conjunction. With no `or` at the top level the predicate is an
+AND, and an AND containing `key = value` can only match rows whose key is that
+value — so those are the only shards read. Every other clause beside it narrows
+the result further and can never add a row from another shard, which is why it
+does not have to be understood.
+
+Anything the builder is not certain about falls back to the fan-out, and that
+asymmetry is deliberate: a query pinned when it should have fanned out does not
+answer slowly, it answers incompletely.
+
+| Query | Reads |
+|---|---|
+| `where('tenant_id', 5)` | one shard |
+| `whereIn('tenant_id', [5, 6])` | the shards those two keys name, up to 100 keys |
+| `where('tenant_id', 5)->where(fn ($q) => $q->where('a', 1)->orWhere('a', 2))` | one shard — the `or` is inside an ANDed group |
+| `where('tenant_id', 5)->orWhere('tenant_id', 6)` | every shard — the top level is not a conjunction |
+| `where('tenant_id', '>', 5)` | every shard — not an equality |
+| `whereRaw('tenant_id = ?', [5])` | every shard — not read |
+| `join('other', ...)->where('other.tenant_id', 5)` | every shard — that column is not ours |
+
+`sharding.pin_by_key` turns it off. Do that while rebalancing:
+`shards:rebalance` moves rows and updates slots without atomicity between the
+two, so for the length of a move a row can sit on one connection while its slot
+names another. A fan-out finds it either way.
+
 When such a query carries a limit, the bound travels to the shards: to produce
 the global rows `[offset, offset + limit)` the merge never needs more than
 `offset + limit` rows from any single shard, so that is what each of them is

@@ -43,6 +43,105 @@ trait Shardable
     }
 
     /**
+     * Insert the row on the connection its own shard key names.
+     *
+     * **This is what makes a row land where its key says it should**, and
+     * until it existed no row reliably did. `Model::save()` builds the query
+     * and only then fires `creating`, so the hook that chose the connection
+     * was always too late: the statement had already been aimed. Two paths
+     * made that visible.
+     *
+     * `Model::create()` goes through `Builder::newModelInstance()`, which
+     * copies the connection of the blank model the builder was made from. That
+     * model had no key, so it had been routed by a generated throwaway one,
+     * and the row was inserted there. And a model whose key is generated —
+     * every snowflake — had no key at query-build time either, so the query
+     * was built on whatever connection the instance happened to carry.
+     *
+     * The row then reported one connection and lived on another. Nothing ever
+     * failed, because every read fans out across all of them and finds it
+     * anyway: the fan-out was covering for it. It surfaces the moment anything
+     * trusts the key — pinning a read to one shard, `shards:distribute`
+     * deciding a row is already in the right place, a rebalance moving it.
+     *
+     * So the placement is decided here, before the query exists, and the
+     * `creating` hook keeps calling the same method: it is idempotent, and
+     * anything that saves through another path still gets routed.
+     *
+     * @param Builder<static> $query
+     * @return bool
+     */
+    protected function performInsert(Builder $query)
+    {
+        $this->resolveShardPlacement();
+
+        // rebuilt on purpose: the query handed to us was aimed before the
+        // line above knew where this row belongs
+        /** @var Builder<static> $aimed */
+        $aimed = $this->newModelQuery();
+
+        return parent::performInsert($aimed);
+    }
+
+    /**
+     * Choose this row's key and the connection it lives on.
+     *
+     * Idempotent, and called from two places for that reason: from
+     * `performInsert()` before the query is built, and from the `creating`
+     * hook, which is where it used to live and which other save paths still
+     * reach.
+     *
+     * A connection already chosen for a replica is left alone. That is the one
+     * case where a connection is a deliberate decision about a row that does
+     * not exist yet, and the `creating` hook has always tested the same flag.
+     *
+     * @return void
+     */
+    protected function resolveShardPlacement(): void
+    {
+        if ($this->exists || $this->getAttribute('is_replica')) {
+            return;
+        }
+
+        $manager = app(ShardingManager::class);
+
+        if (!$manager->isShardable($this)) {
+            return;
+        }
+
+        $keyName = $this->getShardKey();
+        $key = $this->getAttribute($keyName);
+
+        if (!$key) {
+            $key = app(IdGenerator::class)->generate($this);
+            $this->setAttribute($keyName, $key);
+        }
+
+        [$strategy, $config] = $manager->strategyFor($this);
+        $connections = $strategy->determine($key, $config);
+
+        if ($connections === []) {
+            return;
+        }
+
+        $this->setConnection($connections[0]);
+        $this->replicaConnections = array_slice($connections, 1);
+        $this->setAttribute('is_replica', false);
+
+        /*
+        | When the shard key is a column other than the primary key, which is
+        | how colocation is set up, only the shard key has been filled. The
+        | primary key would stay null and the insert would fail, so it is
+        | generated here. Auto-incrementing keys are left to the database.
+        */
+        $primaryKey = $this->getKeyName();
+
+        if ($primaryKey !== $keyName && !$this->getIncrementing() && !$this->getKey()) {
+            $this->setAttribute($primaryKey, app(IdGenerator::class)->generate($this));
+        }
+    }
+
+    /**
      * Boot the shardable trait to assign connections and IDs on model creation.
      *
      * @return void
@@ -61,31 +160,15 @@ trait Shardable
                 return;
             }
 
-            $keyName = $model->getShardKey();
-            $key = $model->getAttribute($keyName);
-
-            if (!$key) {
-                $key = app(IdGenerator::class)->generate($model);
-                $model->setAttribute($keyName, $key);
-            }
-
-            $manager = app(ShardingManager::class);
-            [$strategy, $config] = $manager->strategyFor($model);
-            $connections = $strategy->determine($key, $config);
-            $model->setConnection($connections[0]);
-            $model->replicaConnections = array_slice($connections, 1);
-            $model->setAttribute('is_replica', false);
-
-            // when the shard key is a column other than the primary key, which
-            // is how colocation is set up, the block above filled only the
-            // shard key. The primary key would stay null and the insert would
-            // fail, so it is generated here. Auto-incrementing keys are left
-            // to the database.
-            $primaryKey = $model->getKeyName();
-
-            if ($primaryKey !== $keyName && !$model->getIncrementing() && !$model->getKey()) {
-                $model->setAttribute($primaryKey, app(IdGenerator::class)->generate($model));
-            }
+            /*
+            | The same routing `performInsert()` has already done, kept here
+            | because it is idempotent and because a save that reaches the
+            | insert by another path still has to be routed. What it can no
+            | longer do on its own is aim the statement: by the time this hook
+            | runs the query exists, which is the whole reason the placement
+            | moved earlier.
+            */
+            $model->resolveShardPlacement();
         });
 
         static::created(function ($model): void {
