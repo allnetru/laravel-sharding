@@ -510,6 +510,51 @@ class ShardRebalanceKeysTest extends TestCase
     }
 
     /**
+     * A shard being added is not read from, table or no table.
+     *
+     * `connectionsFor()` answers with everything configured while
+     * `connectionFor()` leaves out anything in `DB_SHARD_MIGRATIONS`, and the
+     * whole-topology scans the preflight added used the first — so a newly
+     * added shard whose table is not migrated yet killed an otherwise targeted
+     * rebalance before anything moved. Found in review.
+     *
+     * @return void
+     */
+    public function testAShardBeingAddedIsNotScanned(): void
+    {
+        config([
+            'database.connections.shard_3' => ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => ''],
+            'sharding.connections' => [
+                'shard_1' => ['weight' => 1],
+                'shard_2' => ['weight' => 1],
+                'shard_3' => ['weight' => 1],
+            ],
+            // added, and not ready: no grants table on it at all
+            'sharding.migrations' => ['shard_3' => true],
+        ]);
+
+        app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
+
+        $target = app(ShardingManager::class)->connectionFor('grants', 1)[0];
+        $source = $target === 'shard_1' ? 'shard_2' : 'shard_1';
+
+        DB::connection($source)->table('grants')->insert([
+            'id' => 1,
+            'user_id' => 1,
+            'role' => 'one',
+            'is_replica' => false,
+        ]);
+
+        $moved = $this->strategy()->rebalance('grants', 'user_id', 'id', $source, null, null, null, [
+            'connections' => config('sharding.connections'),
+            'table' => 'grants',
+        ]);
+
+        $this->assertSame(1, $moved, 'the run died on the shard that is not ready');
+        $this->assertSame(1, DB::connection($target)->table('grants')->count());
+    }
+
+    /**
      * A key whose rows are primaries on two connections is not decided.
      *
      * Choosing either connection strands the rows on the other, so it is a

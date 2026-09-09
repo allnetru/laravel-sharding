@@ -8,6 +8,7 @@ use Allnetru\Sharding\ShardingManager;
 use Allnetru\Sharding\Support\RowComparison;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * Shared logic for moving rows between shard connections.
@@ -73,7 +74,13 @@ trait Rebalanceable
     ): int {
         /** @var ShardingManager $manager */
         $manager = app(ShardingManager::class);
-        $connections = array_keys($manager->connectionsFor($table));
+        $connections = $this->scannable($manager, $table);
+
+        /*
+        | An explicit `--from` overrides the exclusion rather than being
+        | filtered by it: naming a connection listed in DB_SHARD_MIGRATIONS is
+        | how an operator drains one that is being taken back out.
+        */
         if ($from) {
             $connections = [$from];
         }
@@ -279,6 +286,43 @@ trait Rebalanceable
     }
 
     /**
+     * The connections worth reading rows of this table from.
+     *
+     * `connectionsFor()` answers with everything configured, while
+     * `connectionFor()` — the one that routes — leaves out anything listed in
+     * `DB_SHARD_MIGRATIONS`. The difference matters here because a shard being
+     * added is in that list precisely because it is not ready: its copy of the
+     * table may not exist yet, and a scan across the whole topology then died
+     * on an unknown table before anything had moved.
+     *
+     * A connection whose table is absent is dropped as well. There is nothing
+     * to find there, and nothing routes to it either.
+     *
+     * @param ShardingManager $manager
+     * @param string $table
+     * @return list<string>
+     */
+    protected function scannable(ShardingManager $manager, string $table): array
+    {
+        $migrating = (array) config('sharding.migrations', []);
+        $connections = [];
+
+        foreach (array_keys((array) $manager->connectionsFor($table)) as $connection) {
+            if (array_key_exists($connection, $migrating)) {
+                continue;
+            }
+
+            if (!Schema::connection($connection)->hasTable($table)) {
+                continue;
+            }
+
+            $connections[] = (string) $connection;
+        }
+
+        return $connections;
+    }
+
+    /**
      * A manager that has read the routing as it is now.
      *
      * The bound instance is a singleton that copied the `sharding` array when
@@ -337,7 +381,7 @@ trait Rebalanceable
         ?int $end,
         int $chunk,
     ): int {
-        $all = array_keys((array) $manager->connectionsFor($table));
+        $all = $this->scannable($manager, $table);
 
         if (count($all) === count($walked)) {
             return 0;
@@ -450,7 +494,7 @@ trait Rebalanceable
             $table,
             $shardKey,
             $rowKey,
-            array_keys((array) $manager->connectionsFor($table)),
+            $this->scannable($manager, $table),
             $start,
             $end,
             $chunk,
@@ -604,7 +648,7 @@ trait Rebalanceable
     ): int {
         $failed = 0;
 
-        foreach (array_keys((array) $manager->connectionsFor($table)) as $connection) {
+        foreach ($this->scannable($manager, $table) as $connection) {
             $this->walkRows($table, $shardKey, $rowKey, $connection, $start, $end, $chunk, function ($row) use ($manager, $table, $shardKey, $rowKey, &$failed): void {
                 $attributes = (array) $row;
 
