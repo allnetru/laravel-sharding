@@ -797,8 +797,35 @@ class ShardBuilder extends EloquentBuilder
         }
 
         return $this->getModel()->newCollection(
-            $this->takeFromMerge($this->mergeShardResults($iterators), $limit, $offset),
+            $this->eagerLoadMerged($this->takeFromMerge($this->mergeShardResults($iterators), $limit, $offset)),
         );
+    }
+
+    /**
+     * Run the eager loads over rows that were merged from several shards.
+     *
+     * The bounded reads collect their rows from per-shard cursors, and a
+     * cursor does not eager-load — so `first()`, `take()` and `paginate()`
+     * handed rows back with `with()` silently ignored, and every access to the
+     * relation was a lazy query: an N+1 wearing the syntax that exists to
+     * prevent it. `get()` without a bound never had the problem, because each
+     * per-shard copy runs Eloquent's own `get()`, which eager-loads its own
+     * batch.
+     *
+     * Run on this builder rather than per shard, because the rows in hand are
+     * the merged page and nothing else: the relation sees the whole batch,
+     * and its own eager pin decides whether the batch came from one shard.
+     *
+     * @param list<\Illuminate\Database\Eloquent\Model> $models
+     * @return list<\Illuminate\Database\Eloquent\Model>
+     */
+    protected function eagerLoadMerged(array $models): array
+    {
+        if ($models === [] || $this->eagerLoad === []) {
+            return $models;
+        }
+
+        return array_values($this->eagerLoadRelations($models));
     }
 
     /**
@@ -1002,7 +1029,7 @@ class ShardBuilder extends EloquentBuilder
         }
 
         $collection = $this->getModel()->newCollection(
-            $this->takeFromMerge($this->mergeShardResults($iterators), $perPage, $skip),
+            $this->eagerLoadMerged($this->takeFromMerge($this->mergeShardResults($iterators), $perPage, $skip)),
         );
 
         return new LengthAwarePaginator($collection, $total, $perPage, $page, [

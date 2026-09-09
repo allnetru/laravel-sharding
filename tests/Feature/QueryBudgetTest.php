@@ -44,6 +44,13 @@ class QueryBudgetTest extends TestCase
                     'group' => 'budget',
                 ],
                 'budget_parts' => ['group' => 'budget'],
+                // sharded on its own, by its own id: not colocated with anything
+                'budget_notes' => [
+                    'strategy' => 'db_hash_range',
+                    'meta_connection' => 'sqlite',
+                    'slot_size' => 1000,
+                    'replica_count' => 0,
+                ],
             ],
             'sharding.groups' => ['budget' => ['budget_items', 'budget_parts']],
         ]);
@@ -73,6 +80,13 @@ class QueryBudgetTest extends TestCase
                 $table->unsignedBigInteger('tenant_id');
                 $table->unsignedBigInteger('item_id');
                 $table->string('label');
+                $table->boolean('is_replica')->default(false);
+            });
+
+            Schema::connection($connection)->create('budget_notes', function (Blueprint $table): void {
+                $table->unsignedBigInteger('id')->primary();
+                $table->unsignedBigInteger('item_id');
+                $table->string('body');
                 $table->boolean('is_replica')->default(false);
             });
         }
@@ -233,6 +247,98 @@ class QueryBudgetTest extends TestCase
     }
 
     /**
+     * A relation to a table outside the group is not pinned, and finds its rows.
+     *
+     * The eager pin is only sound under colocation. A related table sharded by
+     * its own key lives wherever that key hashes, which is usually not the
+     * parent's shard; pinning its eager load to the parent's connection would
+     * miss every row that landed elsewhere, silently. This is the correctness
+     * half of the eager budget for the other kind of relation.
+     *
+     * @return void
+     */
+    public function testEagerLoadingAcrossGroupsIsNotPinnedAndFindsItsRows(): void
+    {
+        $this->warmUp(5);
+
+        $item = BudgetItem::query()->where('tenant_id', 5)->firstOrFail();
+        $manager = app(ShardingManager::class);
+
+        // a note whose own key lands on the shard the item is not on
+        $noteId = null;
+
+        for ($candidate = 1; $candidate <= 200; $candidate++) {
+            if ($manager->connectionFor('budget_notes', $candidate)[0] !== $item->getConnectionName()) {
+                $noteId = $candidate;
+
+                break;
+            }
+        }
+
+        $this->assertNotNull($noteId, 'no note id of the first two hundred lands away from the item');
+
+        BudgetNote::create(['id' => $noteId, 'item_id' => $item->id, 'body' => 'elsewhere']);
+
+        $loaded = BudgetItem::query()->where('tenant_id', 5)->with('notes')->get();
+
+        $this->assertCount(1, $loaded);
+        $this->assertTrue($loaded[0]->relationLoaded('notes'));
+        $this->assertCount(1, $loaded[0]->notes, 'the note on the other shard was lost to a pin');
+    }
+
+    /**
+     * `first()` with an eager load loads eagerly, not lazily on first touch.
+     *
+     * The bounded read — `first()`, `take()`, `paginate()` — collected its rows
+     * from per-shard cursors and handed them back without ever running the
+     * eager loads, so `with('parts')` on that path did nothing and every access
+     * to `->parts` was a lazy query. An N+1 wearing the syntax that exists to
+     * prevent it.
+     *
+     * @return void
+     */
+    public function testABoundedReadEagerLoadsWhatItWasAskedTo(): void
+    {
+        $this->warmUp(5);
+
+        $item = BudgetItem::query()->where('tenant_id', 5)->firstOrFail();
+        BudgetPart::create(['tenant_id' => 5, 'item_id' => $item->id, 'label' => 'a']);
+
+        $loaded = null;
+        $cost = $this->cost(function () use (&$loaded): void {
+            $loaded = BudgetItem::query()->where('tenant_id', 5)->with('parts')->first();
+        });
+
+        $this->assertNotNull($loaded);
+        $this->assertTrue($loaded->relationLoaded('parts'), 'first() ignored the eager load');
+        $this->assertSame(2, $cost['shard_a'] + $cost['shard_b'], "one parent query and one child query expected, got {$cost['shard_a']} + {$cost['shard_b']}");
+    }
+
+    /**
+     * The same for a page.
+     *
+     * @return void
+     */
+    public function testAPageEagerLoadsWhatItWasAskedTo(): void
+    {
+        $this->warmUp(5);
+        $this->warmUp(6);
+
+        foreach (BudgetItem::query()->get() as $item) {
+            BudgetPart::create(['tenant_id' => $item->tenant_id, 'item_id' => $item->id, 'label' => 'a']);
+        }
+
+        $page = BudgetItem::query()->with('parts')->orderBy('id')->paginate(10);
+
+        $this->assertCount(2, $page->items());
+
+        foreach ($page->items() as $item) {
+            $this->assertTrue($item->relationLoaded('parts'), 'paginate() ignored the eager load');
+            $this->assertCount(1, $item->parts);
+        }
+    }
+
+    /**
      * A key the routing has never seen still resolves, and is then remembered.
      *
      * The cold path may pay the lookup; the point is that it pays it once.
@@ -312,6 +418,14 @@ class BudgetItem extends Model
     {
         return $this->hasMany(BudgetPart::class, 'item_id');
     }
+
+    /**
+     * @return \Illuminate\Database\Eloquent\Relations\HasMany<BudgetNote, $this>
+     */
+    public function notes()
+    {
+        return $this->hasMany(BudgetNote::class, 'item_id');
+    }
 }
 
 /**
@@ -324,6 +438,22 @@ class BudgetPart extends Model
     protected $table = 'budget_parts';
 
     protected string $shardKey = 'tenant_id';
+
+    public $incrementing = false;
+
+    public $timestamps = false;
+
+    protected $guarded = [];
+}
+
+/**
+ * A note about an item, sharded by its own identifier and colocated with nothing.
+ */
+class BudgetNote extends Model
+{
+    use Shardable;
+
+    protected $table = 'budget_notes';
 
     public $incrementing = false;
 
