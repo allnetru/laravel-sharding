@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.5.0 - 2026-09-09
+
+### What's Changed
+
+* The two shard repair commands: route by the shard key, identify by the row key by @allnetru in https://github.com/allnetru/laravel-sharding/pull/79
+
+**A breaking release.** `Strategy::rebalance()` changed shape and `shards:rebalance` takes model classes; both are described under Upgrading. Sixteen rounds of review found forty-one findings, a review of the whole branch afterwards found six more, and a pass over the hot path found the pinning slower than the fan-out it replaced. Everything below has a test, and every test was checked by mutation.
+
+### Fixed
+
+* **`shards:distribute` moved rows by the primary key.** For a colocated table that is a different column from the shard key, so the command scattered precisely the rows colocation exists to keep together. It routes by the shard key and identifies rows by the primary key now, and takes one model class per table, since the tables of a group share the value of their key but not the column it lives in.
+* **Neither repair command could run outside `App\Models`.** Both resolved `App\Models\<Table>` from a table name. Both take model classes, with the old prefix kept as a fallback.
+* **The rebalance used one key for two jobs.** `Rebalanceable` used the same column for the range and for row identity; on a colocated one-to-many table that meant `where('user_id', …)->delete()` after moving a single row, which deleted every other row that user had.
+* **The rebalance read the child's configuration instead of the group owner's**, so slot metadata was written under a name nothing reads and keyed reads went on being routed to the old shard while the rows had moved. Both `RangeStrategy` and the command resolve the owner now.
+* **`RangeStrategy` appended its new range** behind the one it replaced, so `determine()` went on matching the old one and the handoff did nothing. `DbRangeStrategy` inserted a row per rerun into a table unique on `(table, start)`, so every rerun died on the index, and its `determine()` picked between overlapping ranges by luck.
+* **A colliding row was overwritten** wherever a destination already held a different row under the same identifier — the shape of adopting sharding over databases that counted their own identifiers. Every write now compares payloads first, through one `RowComparison`, and refuses rather than destroys.
+* **Replicas the routing advertised did not exist.** Only the primary was written on a move; the placement is made real afterwards, for every table, once the routing has finished saying where the copies belong.
+* **A run that failed halfway looked like success.** A refused row bumped a private counter and the command exited zero; the routing was handed over regardless. A run that leaves any row behind raises `RebalanceIncomplete`, and the routing is not advanced.
+* **`first()`, `take()` and `paginate()` ignored `with()`.** The bounded reads collected their rows from per-shard cursors, and a cursor does not eager-load, so every access to the relation was a lazy query — an N+1 wearing the syntax that exists to prevent it. The merged page is eager-loaded now.
+
+### Changed
+
+* **`shards:rebalance` moves a colocation group, not a table.** Every populated table of the group is named, one model per table; the rows move together and the routing changes once, after all of them have arrived. An empty sibling may be left out. Closes #80.
+* **Everything a rebalance can predict is refused before a row moves**: an occupied destination, two sources holding one identifier, a key this run would move only part of, an active shard missing the table or a key column. What it cannot predict — a connection dropping halfway — is recovered by running it again, because every pass reads its state off the data rather than off a memory of what the run did, and the routing is read off where the rows actually are.
+* **A rebalance is run with `SHARDING_PIN_BY_KEY=false`**, and the guide now explains why: it is what makes the window between rows moving and routing changing safe.
+* **Comments are plain prose.** `docs/en/dev/cs.md` says so, and the markdown emphasis that had crept into docblocks is gone.
+
+### Performance
+
+A test now asserts what a query costs in round trips per connection, on the warm path, and this is what it found before the change on two shards under `db_hash_range`: a keyed read cost two metadata queries and one shard query — three trips in sequence against the two in parallel a fan-out makes, so the pinning was slower than what it replaced. An insert for a known key cost four metadata queries. Building a query builder cost one. An eager load on a fanned-out read cost N² for the relation. Every row of that table is now zero metadata queries and one shard query per table:
+
+* **A keyless model is given a grammar connection**, not a generated key and a routing lookup, every time Eloquent builds a query builder.
+* **Routing is cached** in the store named by `sharding.routing_cache`, written through by `recordMeta()` and `rowMoved()`, namespaced by the connection list so a change of topology is a new namespace rather than a window of stale answers, and aware of whether the metadata holds a placement or only the hash says so. A store that cannot be reached is not consulted.
+* **Recording a slot after an insert is skipped** when the cache already says so.
+* **An eager load stays on the shard its parents came from**, when the relation is colocated and every parent in the batch came from one connection.
+* **An array `where` names its key**: `where(['tenant_id' => 5, …])`, the shape `firstOrCreate()` produces, is read into for the key.
+* `ShardingManager::connection($model, $key)` hands out a key's primary connection ready to run SQL against, which is the helper every application wrote for itself.
+
+### Upgrading
+
+**`Strategy::rebalance()` takes a list of tables.** A custom strategy has to follow the new signature — `rebalance(array $tables, ?string $from, ?string $to, ?int $start, ?int $end, array $config): int`, where `$tables` is a `list<ShardedTable>`, each carrying the table, its shard key and its row key. `SupportsAfterRebalance::afterRebalance()` receives the group owner's table as its first argument. `RowMoveAware::rowMoved()` is called once per key, after the whole run, and never for a run that left a row behind. The reasoning is under «Writing your own» in the sharding guide.
+
+**`shards:rebalance` takes model classes, one per table of the group**, and refuses a populated table left unnamed. `shards:distribute` takes model classes too. A range strategy needs both `--start` and `--end` with `--to`.
+
+**`getConnectionName()` on a keyless model no longer generates a key.** It answers with the first configured connection and leaves the model as it is. Code that read a fresh model's key after asking for its connection was reading a random number; placement is decided by `resolveShardPlacement()` when the row is written.
+
+**The routing cache is on by default** and uses the application's default cache store. Prefer a shared in-memory store. `SHARDING_ROUTING_CACHE=false` turns it off.
+
+**Rows on the wrong shard**, if you already run more than one: deploy with `SHARDING_PIN_BY_KEY=false`, run `shards:distribute --dry-run` with one model per table of each group, then the real run, then turn pinning on.
+
 ## v0.4.1 - 2026-09-09
 
 ### What's Changed
