@@ -72,6 +72,65 @@ class ShardRebalanceGroupOwnerTest extends TestCase
         $this->assertSame('owners', $config['table'], 'the slots were written under the child\'s name');
         $this->assertSame(1000, $config['slot_size'] ?? null, 'the owner\'s slot size was not passed on');
     }
+
+    /**
+     * The new range is written where the routing reads it from.
+     *
+     * `RangeStrategy::afterRebalance()` wrote to
+     * `sharding.tables.<the table it was handed>.ranges`, and the table it was
+     * handed is the child's. The manager resolves the group's owner, so the
+     * range was written where nothing reads it: the rows moved and the
+     * effective range went on naming the old connection. `DbRangeStrategy`
+     * already resolved the scope correctly, which is all the difference was.
+     * Found in review.
+     *
+     * @return void
+     */
+    public function testTheNewRangeIsWrittenUnderTheGroupOwner(): void
+    {
+        config([
+            'sharding.tables.owners.strategy' => 'range',
+            'sharding.tables.owners.ranges' => [],
+        ]);
+        app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
+
+        $this->artisan('shards:rebalance', [
+            'model' => OwnedNote::class,
+            '--to' => 'shard_2',
+            '--start' => 1,
+            '--end' => 100,
+        ])->assertSuccessful();
+
+        $this->assertSame(
+            [['start' => 1, 'end' => 100, 'connection' => 'shard_2']],
+            config('sharding.tables.owners.ranges'),
+            'the range was not written under the group owner',
+        );
+        $this->assertSame(
+            [],
+            (array) config('sharding.tables.owned_notes.ranges', []),
+            'the range was written under the child, where nothing reads it',
+        );
+    }
+
+    /**
+     * A range bound that is not a number is refused, not quietly turned to 0.
+     *
+     * A slot is a numeric range and the bounds apply to the shard key, so a
+     * string shard key has no range this command can express. Casting made
+     * `--start=tenant-a` into 0 and selected an unrelated set of rows.
+     * Reachable only since the bounds moved from the primary key onto the
+     * shard key. Found in review.
+     *
+     * @return void
+     */
+    public function testANonNumericRangeBoundIsRefused(): void
+    {
+        $this->artisan('shards:rebalance', ['model' => OwnedNote::class, '--start' => 'tenant-a'])
+            ->assertFailed();
+
+        $this->assertNull(RecordingStrategy::$config, 'the rebalance ran on a bound it could not express');
+    }
 }
 
 /**

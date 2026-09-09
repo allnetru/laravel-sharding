@@ -168,7 +168,7 @@ class DbRangeStrategy implements Strategy, SupportsAfterRebalance
      * Persist new range information after rebalancing.
      *
      * @param string $table
-     * @param string $key
+     * @param string $shardKey The column a slot is computed from.
      * @param string|null $from
      * @param string|null $to
      * @param int|null $start
@@ -176,7 +176,7 @@ class DbRangeStrategy implements Strategy, SupportsAfterRebalance
      * @param array $config
      * @return void
      */
-    public function afterRebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): void
+    public function afterRebalance(string $table, string $shardKey, ?string $from, ?string $to, ?int $start, ?int $end, array $config): void
     {
         if (!$to || $start === null) {
             return;

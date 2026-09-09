@@ -94,6 +94,29 @@ class Rebalance extends Command
         $shardKey = method_exists($model, 'getShardKey') ? $model->getShardKey() : $model->getKeyName();
         $rowKey = $model->getKeyName();
 
+        /*
+        | Refused rather than cast. A slot is a numeric range, and `--start`
+        | and `--end` bound the shard key — so a model whose shard key is a
+        | string has no range this command can express. Casting was the old
+        | behaviour and it was silent: `--start=tenant-a` became 0, and the run
+        | selected an unrelated set of rows, quite possibly all of them.
+        |
+        | The bounds only became reachable for a string key when they moved
+        | from the primary key onto the shard key, which is why this had never
+        | bitten before.
+        */
+        foreach (['start' => $start, 'end' => $end] as $option => $value) {
+            if ($value !== null && !is_numeric($value)) {
+                $this->error(
+                    "--{$option} has to be a number: it bounds {$table}.{$shardKey}, and a slot is a "
+                    . 'numeric range. A string shard key has no range this command can express — move '
+                    . 'the rows with --from and --to instead.',
+                );
+
+                return self::FAILURE;
+            }
+        }
+
         try {
             $moved = $strategy->rebalance(
                 $table,

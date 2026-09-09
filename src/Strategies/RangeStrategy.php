@@ -71,7 +71,7 @@ class RangeStrategy implements Strategy, SupportsAfterRebalance
      * Update configuration ranges after rebalancing.
      *
      * @param string $table
-     * @param string $key
+     * @param string $shardKey The column a slot is computed from.
      * @param string|null $from
      * @param string|null $to
      * @param int|null $start
@@ -79,14 +79,27 @@ class RangeStrategy implements Strategy, SupportsAfterRebalance
      * @param array $config
      * @return void
      */
-    public function afterRebalance(string $table, string $key, ?string $from, ?string $to, ?int $start, ?int $end, array $config): void
+    public function afterRebalance(string $table, string $shardKey, ?string $from, ?string $to, ?int $start, ?int $end, array $config): void
     {
         if (!$to) {
             return;
         }
 
+        /*
+        | Written where it is read from. `$table` is the table whose rows
+        | moved, which for a colocated child is not where its ranges live:
+        | `ShardingManager` resolves the group's owner, so the ranges this
+        | strategy was handed came from the owner's entry and a new one written
+        | under the child's name is read by nobody. The rows moved and the
+        | range went on naming the old connection.
+        |
+        | `DbRangeStrategy` already resolved the scope this way; this one did
+        | not, which is the whole of the difference.
+        */
+        $scope = $config['table'] ?? $table;
+
         $ranges = $config['ranges'] ?? [];
         $ranges[] = ['start' => $start, 'end' => $end, 'connection' => $to];
-        config(["sharding.tables.{$table}.ranges" => $ranges]);
+        config(["sharding.tables.{$scope}.ranges" => $ranges]);
     }
 }
