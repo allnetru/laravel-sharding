@@ -98,8 +98,16 @@ class RangeStrategy implements Strategy, SupportsAfterRebalance
         */
         $scope = $config['table'] ?? $table;
 
-        $ranges = $config['ranges'] ?? [];
-        $ranges[] = ['start' => $start, 'end' => $end, 'connection' => $to];
-        config(["sharding.tables.{$scope}.ranges" => $ranges]);
+        /*
+        | Put in front, not appended. `determine()` takes the first range that
+        | contains the key, and a rebalance re-homes a sub-range of one that
+        | already exists — so appended, the range being replaced went on
+        | matching first and the handoff did nothing at all. Disjoint ranges
+        | are unaffected by the order.
+        */
+        config(["sharding.tables.{$scope}.ranges" => array_merge(
+            [['start' => $start, 'end' => $end, 'connection' => $to]],
+            (array) ($config['ranges'] ?? []),
+        )]);
     }
 }

@@ -108,6 +108,7 @@ trait Rebalanceable
         }
 
         $clashes += $this->sharedRowKeys($table, $shardKey, $rowKey, $connections, $start, $end, $chunk);
+        $clashes += $this->keysLeftBehind($manager, $table, $shardKey, $rowKey, $connections, $to, $start, $end, $chunk);
 
         if ($clashes > 0) {
             throw new RebalanceIncomplete($table, 0, $clashes);
@@ -231,10 +232,17 @@ trait Rebalanceable
             | Last, because until both metadata steps are done the routing has
             | not finished saying where the copies belong — a range strategy
             | chooses the replicas of a moved key inside `afterRebalance()`.
+            |
+            | And asked of a fresh manager, because the one above is a
+            | singleton that copied the `sharding` array in its constructor.
+            | `RangeStrategy::afterRebalance()` hands the range over by writing
+            | the config, which that snapshot cannot see: the pass would place
+            | copies for the old placement, or fail with «No range configured»
+            | after the rows had already moved.
             */
             if ($failed === 0) {
                 $failed += $this->materialisePlacements(
-                    $manager,
+                    $this->freshManager(),
                     $table,
                     $shardKey,
                     $rowKey,
@@ -268,6 +276,133 @@ trait Rebalanceable
         }
 
         return $moved;
+    }
+
+    /**
+     * A manager that has read the routing as it is now.
+     *
+     * The bound instance is a singleton that copied the `sharding` array when
+     * it was built, and a range strategy hands its range over by writing that
+     * config. Forgotten and re-resolved, so the application's own binding
+     * still decides what a manager is.
+     *
+     * @return ShardingManager
+     */
+    protected function freshManager(): ShardingManager
+    {
+        app()->forgetInstance(ShardingManager::class);
+
+        return app(ShardingManager::class);
+    }
+
+    /**
+     * How many keys this run would move only part of.
+     *
+     * **The split the primary-key preflight cannot see.** That one asks
+     * whether two connections hold the same *row*; this asks whether they hold
+     * the same *key*, which on a colocated table they can do with entirely
+     * different row keys. With `--from` naming one connection, the rows there
+     * move to the target and the rows elsewhere stay — so the key ends up
+     * spread across two connections, its routing can name only one of them,
+     * and the other half stops being found. Detected afterwards, that is
+     * unrecoverable: the move has happened and rerunning finds the same split.
+     *
+     * The condition is precise, because a looser one would break the recovery
+     * this command relies on. A key whose rows sit on a connection this run
+     * will walk is fine: they are all sent to the same target and arrive
+     * together. A key whose rows sit on the target already is fine too — that
+     * is exactly what an interrupted run leaves, and finishing it is the
+     * documented recovery. What is refused is a key with rows on a connection
+     * that will neither be walked nor be the destination.
+     *
+     * @param ShardingManager $manager
+     * @param string $table
+     * @param string $shardKey
+     * @param string $rowKey
+     * @param list<string> $walked The connections this run reads.
+     * @param string|null $to
+     * @param int|null $start
+     * @param int|null $end
+     * @param int $chunk
+     * @return int
+     */
+    protected function keysLeftBehind(
+        ShardingManager $manager,
+        string $table,
+        string $shardKey,
+        string $rowKey,
+        array $walked,
+        ?string $to,
+        ?int $start,
+        ?int $end,
+        int $chunk,
+    ): int {
+        $all = array_keys((array) $manager->connectionsFor($table));
+
+        if (count($all) === count($walked)) {
+            return 0;
+        }
+
+        $left = 0;
+
+        foreach ($this->primariesByKey($manager, $table, $shardKey, $rowKey, $all, $start, $end, $chunk) as $entry) {
+            $target = $to ?? ($manager->connectionFor($table, $entry['key'])[0] ?? null);
+
+            $stranded = array_diff(array_keys($entry['connections']), $walked, [$target]);
+
+            if ($stranded === []) {
+                continue;
+            }
+
+            Log::error('Refused a rebalance: this run would move only part of a key', [
+                'table' => $table,
+                'shard_key' => $entry['key'],
+                'left_on' => array_values($stranded),
+                'walking' => $walked,
+                'target' => $target,
+            ]);
+
+            $left++;
+        }
+
+        return $left;
+    }
+
+    /**
+     * Where each key's primary rows are, across the given connections.
+     *
+     * @param ShardingManager $manager
+     * @param string $table
+     * @param string $shardKey
+     * @param string $rowKey
+     * @param list<string> $connections
+     * @param int|null $start
+     * @param int|null $end
+     * @param int $chunk
+     * @return array<string, array{key: mixed, connections: array<string, true>}>
+     */
+    protected function primariesByKey(
+        ShardingManager $manager,
+        string $table,
+        string $shardKey,
+        string $rowKey,
+        array $connections,
+        ?int $start,
+        ?int $end,
+        int $chunk,
+    ): array {
+        $where = [];
+
+        foreach ($connections as $connection) {
+            $this->walkRows($table, $shardKey, $rowKey, $connection, $start, $end, $chunk, function ($row) use ($shardKey, $connection, &$where): void {
+                $key = (string) $row->$shardKey;
+
+                $where[$key]['key'] = $row->$shardKey;
+                $where[$key]['connections'][$connection] = true;
+            });
+        }
+
+        return $where;
     }
 
     /**
@@ -310,23 +445,33 @@ trait Rebalanceable
         ?int $end,
         int $chunk,
     ): array {
-        $where = [];
-
-        foreach (array_keys((array) $manager->connectionsFor($table)) as $connection) {
-            $this->walkRows($table, $shardKey, $rowKey, $connection, $start, $end, $chunk, function ($row) use ($shardKey, $connection, &$where): void {
-                $where[(string) $row->$shardKey][$connection] = $row->$shardKey;
-            });
-        }
+        $where = $this->primariesByKey(
+            $manager,
+            $table,
+            $shardKey,
+            $rowKey,
+            array_keys((array) $manager->connectionsFor($table)),
+            $start,
+            $end,
+            $chunk,
+        );
 
         $redirects = [];
         $split = 0;
 
-        foreach ($where as $key => $connections) {
-            if (count($connections) > 1) {
+        foreach ($where as $key => $entry) {
+            /*
+            | Defence in depth rather than a reachable branch: `keysLeftBehind()`
+            | refuses a run that would leave a key spread, and a run that
+            | failed does not get here. It stays because the alternative is
+            | choosing one of the two connections silently, and choosing wrong
+            | strands the rows on the other.
+            */
+            if (count($entry['connections']) > 1) {
                 Log::error('A key has rows on more than one connection, so its routing cannot be decided', [
                     'table' => $table,
                     'shard_key' => $key,
-                    'connections' => array_keys($connections),
+                    'connections' => array_keys($entry['connections']),
                 ]);
 
                 $split++;
@@ -334,14 +479,13 @@ trait Rebalanceable
                 continue;
             }
 
-            $connection = (string) array_key_first($connections);
-            $value = reset($connections);
+            $connection = (string) array_key_first($entry['connections']);
 
-            if (($manager->connectionFor($table, $value)[0] ?? null) === $connection) {
+            if (($manager->connectionFor($table, $entry['key'])[0] ?? null) === $connection) {
                 continue;
             }
 
-            $redirects[$key] = [$value, $connection];
+            $redirects[$key] = [$entry['key'], $connection];
         }
 
         return [$redirects, $split];

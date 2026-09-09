@@ -115,7 +115,16 @@ worth knowing before retiring a connection: replicas sitting on it stay there,
 so those keys carry fewer copies than are configured until something rebuilds
 them.
 
-The first pass also refuses a run in which two source connections hold the same
+The first pass also refuses a run that would move only part of a key. Two
+connections holding the same **key** is not the same thing as two holding the
+same **row** — on a colocated table they do it with entirely different row keys
+— and with `--from` naming one of them its rows would move while the rest stayed,
+leaving the key spread across connections its routing can name only one of.
+Noticed afterwards that is unrecoverable, so it is refused first. A key whose
+rows sit on the destination already is not that case: it is what an interrupted
+run leaves, and finishing it is the recovery.
+
+It also refuses a run in which two source connections hold the same
 primary key as primaries. A primary key is unique within a connection, so a key
 two of them share is either different rows under one identifier or a duplicate
 of one row, and both need a person rather than a repair tool.

@@ -445,12 +445,78 @@ class ShardRebalanceKeysTest extends TestCase
     }
 
     /**
+     * A run that would move only part of a key is refused before it moves.
+     *
+     * The primary-key preflight asks whether two connections hold the same
+     * *row*; this is two connections holding the same *key*, which on a
+     * colocated table they do with entirely different row keys. With `--from`
+     * naming one of them, its rows moved and the rest stayed — so the key
+     * ended up spread across two connections, its routing could name only one,
+     * and the other half stopped being found. Detected afterwards that is
+     * unrecoverable: the move has happened and rerunning finds the same split.
+     * Found in review.
+     *
+     * @return void
+     */
+    public function testARunThatWouldMoveOnlyPartOfAKeyIsRefused(): void
+    {
+        config([
+            'database.connections.shard_3' => ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => ''],
+            'sharding.connections' => [
+                'shard_1' => ['weight' => 1],
+                'shard_2' => ['weight' => 1],
+                'shard_3' => ['weight' => 1],
+            ],
+        ]);
+
+        Schema::connection('shard_3')->create('grants', function (Blueprint $table): void {
+            $table->unsignedBigInteger('id')->primary();
+            $table->unsignedBigInteger('user_id');
+            $table->string('role');
+            $table->boolean('is_replica')->default(false);
+        });
+
+        app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
+
+        // one user, two roles, two connections, and different row keys — so
+        // nothing about the primary keys says anything is wrong
+        DB::connection('shard_1')->table('grants')->insert([
+            'id' => 1,
+            'user_id' => 1,
+            'role' => 'here',
+            'is_replica' => false,
+        ]);
+        DB::connection('shard_2')->table('grants')->insert([
+            'id' => 2,
+            'user_id' => 1,
+            'role' => 'and there',
+            'is_replica' => false,
+        ]);
+
+        try {
+            $this->strategy()->rebalance('grants', 'user_id', 'id', 'shard_1', 'shard_3', null, null, [
+                'connections' => config('sharding.connections'),
+                'table' => 'grants',
+            ]);
+
+            $this->fail('half of a key was moved');
+        } catch (RebalanceIncomplete $e) {
+            $this->assertSame(0, $e->moved);
+        }
+
+        $this->assertSame(1, DB::connection('shard_1')->table('grants')->count(), 'a row was carried off');
+        $this->assertSame(1, DB::connection('shard_2')->table('grants')->count());
+        $this->assertSame(0, DB::connection('shard_3')->table('grants')->count());
+    }
+
+    /**
      * A key whose rows are primaries on two connections is not decided.
      *
      * Choosing either connection strands the rows on the other, so it is a
-     * failure rather than a guess. This is also what makes the placement pass
-     * simple: it never has to meet an occupant claiming to be the primary,
-     * because that state is refused here first.
+     * failure rather than a guess — and it is refused up front by
+     * `keysLeftBehind()` rather than noticed afterwards. This is also what
+     * makes the placement pass simple: it never has to meet an occupant
+     * claiming to be the primary, because that state cannot get past here.
      *
      * @return void
      */
