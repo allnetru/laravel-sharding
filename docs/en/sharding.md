@@ -192,6 +192,30 @@ unconditional `is_replica = false`, so a query sent to a replica comes back
 empty by construction. Pinning to the primary therefore loses nothing, and
 reading the copies would cost a round trip for a certainty.
 
+### Repairing placement
+
+A row is placed by its shard key when it is written. Anything written before
+that was true, moved by hand, or restored from a dump taken on another topology
+can be sitting on a shard its key does not name — and a fan-out finds such a
+row anyway, which is how it goes unnoticed. A keyed read does not.
+
+```bash
+# how many rows are not where they belong, moving nothing
+php artisan shards:distribute "App\Models\User" "App\Models\UserRole" --dry-run
+
+# and then move them
+php artisan shards:distribute "App\Models\User" "App\Models\UserRole"
+```
+
+One model per table, because the tables of a colocation group share a key but
+not the column it lives in: `users.id` and `user_roles.user_id` are the same
+key under two names, and only the model knows its own. A group swept in part is
+the one state to avoid, so the command names the tables left over.
+
+Replica copies are left alone: a replica belongs on a replica connection rather
+than on the primary its key names, and moving one by that rule would break the
+pair it is half of.
+
 `sharding.pin_by_key` turns it off. Do that while rebalancing:
 `shards:rebalance` moves rows and updates slots without atomicity between the
 two, so for the length of a move a row can sit on one connection while its slot

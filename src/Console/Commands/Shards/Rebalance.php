@@ -58,7 +58,14 @@ class Rebalance extends Command
             return self::FAILURE;
         }
 
-        $key = $model->getKeyName();
+        /*
+        | The shard key, not the primary key. For a colocated table those are
+        | different columns, and rebalancing by the wrong one moves rows the
+        | slot change never asked about while leaving the ones it did — which
+        | is worse than not rebalancing at all, because the slot table then
+        | says something untrue about where the data is.
+        */
+        $key = method_exists($model, 'getShardKey') ? $model->getShardKey() : $model->getKeyName();
         $moved = $strategy->rebalance($table, $key, $from, $to, $start !== null ? (int) $start : null, $end !== null ? (int) $end : null, $config);
 
         $this->info("Moved {$moved} records.");

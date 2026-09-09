@@ -287,7 +287,7 @@ for more advanced scenarios.
 
 Use the bundled Artisan commands to inspect and maintain shards:
 
-- `php artisan shards:distribute {model}` – backfill existing tables into shards in chunks once strategies are configured.
+- `php artisan shards:distribute {model} [{model} ...] [--dry-run]` – put existing rows on the shard their own key names, in chunks. One model per table: the tables of a colocation group share a key but not the column it lives in (`users.id` and `user_roles.user_id` are the same key under two names), and only the model knows its own. `--dry-run` counts what is misplaced without moving anything, which is what to run before an upgrade.
 - `php artisan shards:rebalance {table}` – migrate rows between shards with optional `--from`, `--to`, `--start`, and `--end` filters.
 - `php artisan shards:migrate` – run shard-specific migrations across every configured connection.
 
