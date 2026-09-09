@@ -39,4 +39,14 @@ class ShardBelongsTo extends BelongsTo
             $this->query->where($key, '=', $foreignKey);
         }
     }
+
+    /** @inheritDoc */
+    public function addEagerConstraints(array $models)
+    {
+        // the batch here is the children, and under colocation their owners
+        // are on the connection the children came from
+        $this->pinEagerLoadToParentsShard($models);
+
+        parent::addEagerConstraints($models);
+    }
 }

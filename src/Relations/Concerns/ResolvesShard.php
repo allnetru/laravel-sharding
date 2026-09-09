@@ -4,6 +4,7 @@ namespace Allnetru\Sharding\Relations\Concerns;
 
 use Allnetru\Sharding\ShardBuilder;
 use Allnetru\Sharding\ShardingManager;
+use Allnetru\Sharding\Support\Colocation;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasOneOrManyThrough;
 use Illuminate\Support\Str;
@@ -13,6 +14,60 @@ use Illuminate\Support\Str;
  */
 trait ResolvesShard
 {
+    /**
+     * Pin an eager load to the shard the batch of parents came from.
+     *
+     * `with()` runs one relation query per batch of parents, and a batch is
+     * what one shard returned. When the relation is colocated the children are
+     * on that same shard by construction — that is what colocation is — but
+     * the relation query is a fresh builder, and unless its `whereIn` happened
+     * to be on the shard key it fanned out over every shard. Measured on two
+     * shards: a fanned-out read with one eager relation cost 3 + 3 queries
+     * where 2 + 2 was the truth of it, and the relation alone grows as N².
+     *
+     * Two conditions, and both have to hold or the fan-out answers. The related
+     * table has to be sharded and colocated with the parent — a global table
+     * lives on the default connection, and a table in another group is on a
+     * shard of its own. And every parent in the batch has to have come from
+     * the same connection: a collection assembled from several shards and then
+     * given `->load()` is one batch with several homes, and pinning it to the
+     * first parent's shard would silently drop every other parent's children,
+     * which is the one failure this package must not have.
+     *
+     * @param array<int, Model> $models the batch of parents being eager-loaded
+     * @return void
+     */
+    protected function pinEagerLoadToParentsShard(array $models): void
+    {
+        if ($models === [] || !($this->query instanceof ShardBuilder)) {
+            return;
+        }
+
+        $manager = app(ShardingManager::class);
+
+        if (!$manager->isShardable($this->related) || !app(Colocation::class)->holds($this)) {
+            return;
+        }
+
+        $connection = null;
+
+        foreach ($models as $model) {
+            $own = $model->getConnectionName();
+
+            if ($connection !== null && $own !== $connection) {
+                return;
+            }
+
+            $connection = $own;
+        }
+
+        if ($connection === null) {
+            return;
+        }
+
+        $this->query->onShardConnection($connection);
+    }
+
     /**
      * Pin the relation's query to the shard the related rows live on.
      *

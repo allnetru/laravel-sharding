@@ -41,8 +41,11 @@ class QueryBudgetTest extends TestCase
                     'meta_connection' => 'sqlite',
                     'slot_size' => 1000,
                     'replica_count' => 0,
+                    'group' => 'budget',
                 ],
+                'budget_parts' => ['group' => 'budget'],
             ],
+            'sharding.groups' => ['budget' => ['budget_items', 'budget_parts']],
         ]);
 
         app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
@@ -62,6 +65,14 @@ class QueryBudgetTest extends TestCase
                 $table->unsignedBigInteger('id')->primary();
                 $table->unsignedBigInteger('tenant_id');
                 $table->string('name');
+                $table->boolean('is_replica')->default(false);
+            });
+
+            Schema::connection($connection)->create('budget_parts', function (Blueprint $table): void {
+                $table->unsignedBigInteger('id')->primary();
+                $table->unsignedBigInteger('tenant_id');
+                $table->unsignedBigInteger('item_id');
+                $table->string('label');
                 $table->boolean('is_replica')->default(false);
             });
         }
@@ -137,6 +148,91 @@ class QueryBudgetTest extends TestCase
     }
 
     /**
+     * Eager-loading a colocated relation reads the shard the parents came from.
+     *
+     * `with('parts')` runs one relation query per batch of parents, and a batch
+     * is what one shard returned. The children of a colocated table are on
+     * that same shard by construction — that is what colocation is — but the
+     * relation query is a fresh builder, and unless its `whereIn` happens to
+     * be on the shard key it fanned out over every shard. N shards, N batches,
+     * N queries each: a page that should cost one query per table cost N² for
+     * the relation alone.
+     *
+     * @return void
+     */
+    public function testEagerLoadingAColocatedRelationStaysOnTheParentsShard(): void
+    {
+        $this->warmUp(5);
+
+        $item = BudgetItem::query()->where('tenant_id', 5)->firstOrFail();
+        BudgetPart::create(['tenant_id' => 5, 'item_id' => $item->id, 'label' => 'a']);
+        BudgetPart::create(['tenant_id' => 5, 'item_id' => $item->id, 'label' => 'b']);
+
+        $cost = $this->cost(fn () => BudgetItem::query()->where('tenant_id', 5)->with('parts')->get());
+
+        $this->assertSame(2, $cost['shard_a'] + $cost['shard_b'], "one parent query and one child query expected, got {$cost['shard_a']} + {$cost['shard_b']}");
+        $this->assertSame(0, $cost['sqlite']);
+    }
+
+    /**
+     * The same for a relation eager-loaded on a fanned-out read.
+     *
+     * Without a key the parents come from every shard, one batch each, and each
+     * batch's children are on its own shard: N queries for the relation, not
+     * N times N.
+     *
+     * @return void
+     */
+    public function testEagerLoadingOnAFanOutCostsOneChildQueryPerShard(): void
+    {
+        $this->warmUp(5);
+        $this->warmUp(6);
+
+        foreach (BudgetItem::query()->get() as $item) {
+            BudgetPart::create(['tenant_id' => $item->tenant_id, 'item_id' => $item->id, 'label' => 'a']);
+        }
+
+        $cost = $this->cost(fn () => BudgetItem::query()->with('parts')->get());
+
+        $this->assertSame(4, $cost['shard_a'] + $cost['shard_b'], "two parent queries and two child queries expected, got {$cost['shard_a']} + {$cost['shard_b']}");
+    }
+
+    /**
+     * A relation loaded onto a collection from several shards finds every child.
+     *
+     * The eager pin is only sound when every parent in the batch came from the
+     * same connection. A collection assembled by a fan-out and then given
+     * `->load()` is one batch with several homes; pinning it to the first
+     * parent's shard would drop every other parent's children silently, so it
+     * must fan out instead. This is the correctness half of the eager budget.
+     *
+     * @return void
+     */
+    public function testLoadingARelationOntoAMixedCollectionFindsEveryChild(): void
+    {
+        $this->warmUp(5);
+        $this->warmUp(6);
+
+        $items = BudgetItem::query()->get();
+
+        $this->assertSame(
+            2,
+            $items->map(fn (BudgetItem $item): string => (string) $item->getConnectionName())->unique()->count(),
+            'the two tenants landed on one shard, so this fixture proves nothing',
+        );
+
+        foreach ($items as $item) {
+            BudgetPart::create(['tenant_id' => $item->tenant_id, 'item_id' => $item->id, 'label' => 'a']);
+        }
+
+        $items->load('parts');
+
+        foreach ($items as $item) {
+            $this->assertCount(1, $item->parts, "tenant {$item->tenant_id} lost its part to a pin on another shard");
+        }
+    }
+
+    /**
      * A key the routing has never seen still resolves, and is then remembered.
      *
      * The cold path may pay the lookup; the point is that it pays it once.
@@ -200,6 +296,32 @@ class BudgetItem extends Model
     use Shardable;
 
     protected $table = 'budget_items';
+
+    protected string $shardKey = 'tenant_id';
+
+    public $incrementing = false;
+
+    public $timestamps = false;
+
+    protected $guarded = [];
+
+    /**
+     * @return \Illuminate\Database\Eloquent\Relations\HasMany<BudgetPart, $this>
+     */
+    public function parts()
+    {
+        return $this->hasMany(BudgetPart::class, 'item_id');
+    }
+}
+
+/**
+ * A part of an item, colocated with it by tenant.
+ */
+class BudgetPart extends Model
+{
+    use Shardable;
+
+    protected $table = 'budget_parts';
 
     protected string $shardKey = 'tenant_id';
 
