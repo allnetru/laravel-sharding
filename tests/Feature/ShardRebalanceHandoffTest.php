@@ -366,6 +366,44 @@ class ShardRebalanceHandoffTest extends TestCase
     }
 
     /**
+     * A routing unit is redirected only when every key of it is in one place.
+     *
+     * `DbHashRangeStrategy` records a slot, and a slot is many keys. The
+     * redirect pass used to decide per key: after a `--from shard_1 --to
+     * shard_3` run interrupted between two keys of one slot, a rerun with
+     * `--from shard_1` alone found the moved key on shard_3, redirected the
+     * whole slot there, and reported success — with the other key still a
+     * primary on shard_1 where the routing no longer looked. Found in review.
+     *
+     * @return void
+     */
+    public function testAUnitWithKeysOnTwoConnectionsIsRefusedRatherThanRedirected(): void
+    {
+        // keys 10 and 12 share unit 1; the routing still names shard_1 for it
+        DB::connection('shard_3')->table('grants')->insert(['id' => 1, 'user_id' => 10, 'role' => 'moved', 'is_replica' => false]);
+        DB::connection('shard_1')->table('grants')->insert(['id' => 2, 'user_id' => 12, 'role' => 'left', 'is_replica' => false]);
+
+        $config = ['connections' => config('sharding.connections'), 'table' => 'grants', 'replica_count' => 1];
+
+        try {
+            (new SlottedStrategy())->rebalance([new ShardedTable('grants', 'user_id', 'id')], 'shard_1', null, null, null, $config);
+            $this->fail('a unit split over two connections was decided anyway');
+        } catch (RebalanceIncomplete) {
+            // refused, which is the point
+        }
+
+        $this->assertSame([], MappedStrategy::$map, 'the slot was redirected with a key left behind');
+        $this->assertSame(1, DB::connection('shard_1')->table('grants')->where('user_id', 12)->count());
+
+        // the run that finishes the interrupted one moves the rest of the unit
+        (new SlottedStrategy())->rebalance([new ShardedTable('grants', 'user_id', 'id')], 'shard_1', 'shard_3', null, null, $config);
+
+        $this->assertSame(['1' => ['shard_3', 'shard_2']], MappedStrategy::$map);
+        $this->assertSame(0, DB::connection('shard_1')->table('grants')->where('is_replica', false)->count());
+        $this->assertSame(2, DB::connection('shard_3')->table('grants')->where('is_replica', false)->count());
+    }
+
+    /**
      * A range strategy gets its placement materialised too.
      *
      * Materialisation used to sit inside the redirect loop, which only runs
@@ -633,5 +671,30 @@ class RangingStrategy implements Strategy, SupportsAfterRebalance
      */
     public function recordReplica(mixed $key, string $connection, array $config): void
     {
+    }
+}
+
+/**
+ * The same routing, kept per unit of ten keys: what a slot strategy does.
+ */
+class SlottedStrategy extends MappedStrategy
+{
+    public function determine(mixed $key, array $config): array
+    {
+        return static::$map[$this->routingUnit($key, $config)] ?? static::$fallback;
+    }
+
+    public function rowMoved(int|string $key, string $connection, array $config): void
+    {
+        $names = array_keys((array) ($config['connections'] ?? []));
+        sort($names);
+        $index = (int) array_search($connection, $names, true);
+
+        static::$map[$this->routingUnit($key, $config)] = [$connection, $names[($index + 2) % count($names)]];
+    }
+
+    protected function routingUnit(mixed $key, array $config): string
+    {
+        return (string) intdiv((int) $key, 10);
     }
 }

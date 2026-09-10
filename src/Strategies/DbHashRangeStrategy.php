@@ -233,8 +233,9 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
      * `--start` and `--end` share their slots with keys outside them.
      * `rowMoved()` for one such key would redirect the whole slot to the
      * target, and every other key of that slot would go on sitting where the
-     * routing no longer looks. Without bounds each slot moves whole and the
-     * redirect is right.
+     * routing no longer looks. Without bounds every key of a slot is in view,
+     * and `routingUnit()` lets the redirect be decided for the slot as a
+     * whole.
      *
      * @param string|null $to
      * @param int|null $start
@@ -255,10 +256,22 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
     }
 
     /**
+     * The slot, since that is what the routing is recorded for.
+     *
+     * @param mixed $key
+     * @param array<string, mixed> $config
+     * @return string
+     */
+    protected function routingUnit(mixed $key, array $config): string
+    {
+        return 'slot:' . $this->slotFor($key, $config);
+    }
+
+    /**
      * Handle updates after a record is moved.
      *
      * Redirects the key's slot, so it is right only when every key of the slot
-     * has moved; refuseAnUnexpressibleTarget() is what guarantees that.
+     * has moved; routingUnit() is what lets the rebalance make sure of that.
      *
      * @param int|string $id
      * @param string $connection

@@ -8,6 +8,7 @@ use Allnetru\Sharding\ShardingManager;
 use Allnetru\Sharding\Support\Colocation;
 use Allnetru\Sharding\Tests\TestCase;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\Pivot;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
@@ -33,7 +34,7 @@ class ColocationTest extends TestCase
             'sharding.tables' => [],
             'sharding.groups' => [
                 'user_data' => ['co_users', 'co_grants'],
-                'tenant_data' => ['co_notes', 'co_parts'],
+                'tenant_data' => ['co_notes', 'co_parts', 'co_marks', 'co_note_part'],
             ],
         ]);
 
@@ -101,6 +102,33 @@ class ColocationTest extends TestCase
     public function testARelationAcrossGroupsDoesNotHold(): void
     {
         $this->assertFalse($this->colocation()->holds((new CoUser())->notes()));
+    }
+
+    /**
+     * A through relation is constructed with the intermediate model as its
+     * parent, so the far parent — whose shard the outer query runs on — was
+     * never looked at: a user's parts through their notes passed as colocated
+     * because notes and parts are, while the user is in another group. Found
+     * in review.
+     */
+    public function testAThroughRelationWhoseFarParentIsInAnotherGroupDoesNotHold(): void
+    {
+        $this->assertFalse($this->colocation()->holds((new CoUser())->partsThroughNotes()));
+    }
+
+    public function testAThroughRelationWithAllThreeTablesColocatedHolds(): void
+    {
+        $this->assertTrue($this->colocation()->holds((new CoNote())->marksThroughParts()));
+    }
+
+    public function testAPivotNobodyDeclaredAShardKeyForDoesNotHold(): void
+    {
+        $this->assertFalse($this->colocation()->holds((new CoNote())->partsThroughPlainPivot()));
+    }
+
+    public function testAPivotColocatedWithBothEndsHolds(): void
+    {
+        $this->assertTrue($this->colocation()->holds((new CoNote())->partsThroughShardedPivot()));
     }
 
     public function testAnEagerLoadOfASelfRelationFindsTheRowOnTheOtherShard(): void
@@ -182,6 +210,11 @@ class CoUser extends Model
     {
         return $this->hasMany(CoNote::class, 'user_id');
     }
+
+    public function partsThroughNotes()
+    {
+        return $this->hasManyThrough(CoPart::class, CoNote::class, 'user_id', 'note_id', 'id', 'id');
+    }
 }
 
 class CoGrant extends Model
@@ -219,6 +252,43 @@ class CoNote extends Model
     {
         return $this->hasMany(CoPart::class, 'note_id');
     }
+
+    public function marksThroughParts()
+    {
+        return $this->hasManyThrough(CoMark::class, CoPart::class, 'note_id', 'part_id', 'id', 'id');
+    }
+
+    public function partsThroughPlainPivot()
+    {
+        return $this->belongsToMany(CoPart::class, 'co_note_part', 'note_id', 'part_id');
+    }
+
+    public function partsThroughShardedPivot()
+    {
+        return $this->belongsToMany(CoPart::class, 'co_note_part', 'note_id', 'part_id')->using(CoNotePart::class);
+    }
+}
+
+class CoMark extends Model
+{
+    use Shardable;
+
+    protected $table = 'co_marks';
+    public $timestamps = false;
+    public $incrementing = false;
+    protected $guarded = [];
+    protected string $shardKey = 'tenant_id';
+}
+
+class CoNotePart extends Pivot
+{
+    use Shardable;
+
+    protected $table = 'co_note_part';
+    public $timestamps = false;
+    public $incrementing = false;
+    protected $guarded = [];
+    protected string $shardKey = 'tenant_id';
 }
 
 class CoTag extends Model
