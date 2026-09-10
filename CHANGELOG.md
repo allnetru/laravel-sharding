@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.5.1 - 2026-09-10
+
+Nine findings from two review rounds on 0.5.0, each fixed with a test that fails on the unfixed code (checked by mutating the fix back and running the test).
+
+### Correctness
+
+- **`Colocation::holds()` trusted the shared-column shape on the column name alone.** A table sharded by its own `id` relating to itself (`users.invited_by → users.id`) has the same shard-key *name* on both sides and two different rows' *values*, so the eager load was pinned to the parent's shard and every inviter on the other shard came back `null`; `whereHas` on the same relation answered from one shard. The shared-column shape now requires a column both rows carry as a value, not as their identity; the parent-key shape (join on both shard keys) is unchanged. `ColocationTest` lists every shape and exercises the self-relation end to end.
+  
+- **Outside a group the strategy comparison always said "different".** `strategyFor()` returns a config that carries the table name, so two ungrouped tables never colocated — and neither did a table relating to itself. Now: outside a group, only the same table qualifies, because a strategy that records its routing records it per scope.
+  
+- **The migration exclusion lived in `connectionFor()` only.** The insert path resolved its placement through `strategyFor()` + `determine()` against the full list and could put a new row on a shard listed in `DB_SHARD_MIGRATIONS`; `recordMeta()` and the rebalance derived the routing-cache namespace from the full list while reads derived it from the filtered one, so a handover during a migration was invisible to readers until the entry expired. `strategyFor()` now hands out the filtered list; `connectionsFor()` stays the unfiltered view for the code that scans a departing shard.
+  
+- **Through and pivot relations checked all three tables.** A `hasManyThrough` is constructed with the intermediate model as its parent, so the far parent — whose shard the correlated subquery actually runs on — was never looked at, and a `belongsToMany` never looked at its pivot; `User::whereHas('worksThroughParcels')` passed as colocated because parcels and works are, while the user is in another group. Both shapes now hold only when all three tables are in one group and share a shard column none of them uses as its primary key.
+  
+
+### Rebalance
+
+- **Routing is redirected per unit, not per key.** `DbHashRangeStrategy` records a slot, and a slot is many keys; the redirect pass decided per key, so an interrupted `--from A --to C` run followed by a rerun with `--from A` alone redirected the whole slot from the one moved key and stranded the rest as primaries the routing no longer looked at. A `routingUnit()` hook groups the preflight and the redirect pass by the strategy's unit: a slot split over two connections is refused, a slot is redirected once.
+  
+- **`--to` no longer keeps the source copy on a guess.** Which connections a key names after the handover is decided inside `rowMoved()`, after the row has moved; with a target outside the current placement the old rule kept the old primary as a replica nothing advertised — hidden by the scope, skipped by every walk, never cleaned up. The source is released and `materialisePlacements()` writes back whatever the routing then names. One existing test asserted the old behaviour and was corrected.
+  
+- **`DbHashRangeStrategy` refuses `--to` with `--start`/`--end`.** A slot is a hash of the key, not a range of it; keys inside the bounds share slots with keys outside them, and `rowMoved()` for one of them redirected the whole slot. Bounds without `--to` and `--to` without bounds are unaffected.
+  
+
+### Hardening
+
+- `RoutingCache::namespaceFor()` fingerprints the connection weights too, since the hashed fallback depends on them.
+- `RowComparison::same()` no longer treats column order as identity.
+
+Docs: `docs/en/sharding.md` (migrations, `--to` retention, slot bounds, cache namespace), README `shards:rebalance` line.
+
 ## v0.5.0 - 2026-09-09
 
 ### What's Changed
