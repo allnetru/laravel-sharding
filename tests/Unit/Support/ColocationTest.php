@@ -121,6 +121,15 @@ class ColocationTest extends TestCase
         $this->assertTrue($this->colocation()->holds((new CoNote())->marksThroughParts()));
     }
 
+    /**
+     * Three tables that all shard by `id` share a column name and nothing
+     * else: each row's value is its own identity.
+     */
+    public function testAThroughRelationOverTablesShardedByTheirOwnKeysDoesNotHold(): void
+    {
+        $this->assertFalse($this->colocation()->holds((new CoUser())->inviteesOfInvitees()));
+    }
+
     public function testAPivotNobodyDeclaredAShardKeyForDoesNotHold(): void
     {
         $this->assertFalse($this->colocation()->holds((new CoNote())->partsThroughPlainPivot()));
@@ -209,6 +218,11 @@ class CoUser extends Model
     public function notes()
     {
         return $this->hasMany(CoNote::class, 'user_id');
+    }
+
+    public function inviteesOfInvitees()
+    {
+        return $this->hasManyThrough(self::class, self::class, 'invited_by', 'invited_by', 'id', 'id');
     }
 
     public function partsThroughNotes()
