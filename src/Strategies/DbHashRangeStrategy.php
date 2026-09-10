@@ -225,7 +225,53 @@ class DbHashRangeStrategy implements RowMoveAware, Strategy
     }
 
     /**
+     * Refuse a bounded move to an explicit target.
+     *
+     * The generic check passes a row-aware strategy any target, because it can
+     * redirect each key. This one cannot: the routing is kept per slot, and a
+     * slot is a hash of the key rather than a range of it, so the keys inside
+     * `--start` and `--end` share their slots with keys outside them.
+     * `rowMoved()` for one such key would redirect the whole slot to the
+     * target, and every other key of that slot would go on sitting where the
+     * routing no longer looks. Without bounds every key of a slot is in view,
+     * and `routingUnit()` lets the redirect be decided for the slot as a
+     * whole.
+     *
+     * @param string|null $to
+     * @param int|null $start
+     * @param int|null $end
+     * @return void
+     */
+    protected function refuseAnUnexpressibleTarget(?string $to, ?int $start, ?int $end): void
+    {
+        if ($to === null || ($start === null && $end === null)) {
+            return;
+        }
+
+        throw new InvalidArgumentException(
+            static::class . ' routes by slot, and a slot is a hash of the key rather than a range of it: an explicit '
+            . 'target with --start or --end would redirect whole slots after moving only the keys inside the bounds. '
+            . 'Move the range by the routing, or the whole connection with --from.',
+        );
+    }
+
+    /**
+     * The slot, since that is what the routing is recorded for.
+     *
+     * @param mixed $key
+     * @param array<string, mixed> $config
+     * @return string
+     */
+    protected function routingUnit(mixed $key, array $config): string
+    {
+        return 'slot:' . $this->slotFor($key, $config);
+    }
+
+    /**
      * Handle updates after a record is moved.
+     *
+     * Redirects the key's slot, so it is right only when every key of the slot
+     * has moved; routingUnit() is what lets the rebalance make sure of that.
      *
      * @param int|string $id
      * @param string $connection

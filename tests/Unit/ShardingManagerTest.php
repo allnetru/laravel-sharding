@@ -115,6 +115,26 @@ class ShardingManagerTest extends TestCase
         $this->assertArrayNotHasKey('users-migrating', $strategy->lastConfig['connections']);
     }
 
+    /**
+     * The configuration a strategy is handed is the one it routes by, so the
+     * migrating connections are already out of it. Every consumer of it — the
+     * insert path, `recordMeta()`, the rebalance — then agrees with
+     * `connectionFor()` on the list, and on the routing-cache namespace derived
+     * from it. Found in review.
+     */
+    public function testStrategyForLeavesMigratingConnectionsOut(): void
+    {
+        $config = $this->baseConfig;
+        $config['tables']['users']['connections']['users-migrating'] = ['weight' => 1];
+        $config['migrations'] = ['users-migrating' => true];
+        $manager = new ShardingManager($config);
+
+        [, $strategyConfig] = $manager->strategyFor('users');
+
+        $this->assertSame(['users-primary', 'users-archive'], array_keys($strategyConfig['connections']));
+        $this->assertArrayHasKey('users-migrating', $manager->connectionsFor('users'), 'the unfiltered view lost the shard');
+    }
+
     public function testStrategyForThrowsWhenStrategyIsMissing(): void
     {
         $manager = new ShardingManager([

@@ -102,7 +102,7 @@ trait Rebalanceable
             $refused += $this->sharedRowKeys($table, $walked, $start, $end, $chunk);
         }
 
-        $refused += $this->keysLeftBehind($manager, $tables, $everywhere, $walked, $to, $start, $end, $chunk);
+        $refused += $this->keysLeftBehind($manager, $tables, $everywhere, $walked, $to, $start, $end, $chunk, $config);
 
         if ($refused > 0) {
             throw new RebalanceIncomplete($scope, 0, $refused);
@@ -112,7 +112,7 @@ trait Rebalanceable
         $failed = 0;
 
         foreach ($tables as $table) {
-            [$arrived, $left] = $this->moveRows($manager, $table, $walked, $to, $start, $end, $chunk, $config);
+            [$arrived, $left] = $this->moveRows($manager, $table, $walked, $to, $start, $end, $chunk);
 
             $moved += $arrived;
             $failed += $left;
@@ -124,7 +124,7 @@ trait Rebalanceable
         | handed over while any row is, is what makes rows unreachable.
         */
         if ($failed === 0) {
-            [$redirects, $split] = $this->redirectsFromWhereRowsAre($manager, $tables, $everywhere, $start, $end, $chunk);
+            [$redirects, $split] = $this->redirectsFromWhereRowsAre($manager, $tables, $everywhere, $start, $end, $chunk, $config);
 
             $failed += $split;
 
@@ -294,7 +294,6 @@ trait Rebalanceable
      * @param int|null $start
      * @param int|null $end
      * @param int $chunk
-     * @param array<string, mixed> $config
      * @return array{0: int, 1: int} How many arrived, and how many did not.
      */
     protected function moveRows(
@@ -305,13 +304,12 @@ trait Rebalanceable
         ?int $start,
         ?int $end,
         int $chunk,
-        array $config,
     ): array {
         $moved = 0;
         $failed = 0;
 
         foreach ($walked as $connection) {
-            $this->walkRows($table, $connection, $start, $end, $chunk, function (object $row) use ($manager, $table, $connection, $to, $config, &$moved, &$failed): void {
+            $this->walkRows($table, $connection, $start, $end, $chunk, function (object $row) use ($manager, $table, $connection, $to, &$moved, &$failed): void {
                 $placement = $this->placementFor($manager, $table, $to, $row);
                 $target = $placement[0];
 
@@ -364,7 +362,7 @@ trait Rebalanceable
                     | the `is_replica = false` scope: a duplicate that nothing
                     | can see and nothing rebuilds.
                     */
-                    if (in_array($connection, $this->copiesToKeep($manager, $table, $to, $row, $placement, $config), true)) {
+                    if (in_array($connection, $this->copiesToKeep($to, $placement), true)) {
                         $sourceConn->table($table->table)->where($table->rowKey, $id)->update(['is_replica' => true]);
                     } else {
                         $sourceConn->table($table->table)->where($table->rowKey, $id)->delete();
@@ -482,6 +480,7 @@ trait Rebalanceable
      * @param int|null $start
      * @param int|null $end
      * @param int $chunk
+     * @param array<string, mixed> $config
      * @return int
      */
     protected function keysLeftBehind(
@@ -493,6 +492,7 @@ trait Rebalanceable
         ?int $start,
         ?int $end,
         int $chunk,
+        array $config,
     ): int {
         if (array_diff($everywhere, $walked) === []) {
             return 0;
@@ -500,7 +500,7 @@ trait Rebalanceable
 
         $left = 0;
 
-        foreach ($this->primariesByKey($tables, $everywhere, $start, $end, $chunk) as $entry) {
+        foreach ($this->primariesByUnit($tables, $everywhere, $start, $end, $chunk, $config) as $unit => $entry) {
             $on = array_keys($entry['connections']);
 
             if (array_intersect($on, $walked) === []) {
@@ -514,8 +514,9 @@ trait Rebalanceable
                 continue;
             }
 
-            Log::error('Refused a rebalance: this run would move only part of a key', [
-                'shard_key' => $entry['key'],
+            Log::error('Refused a rebalance: this run would move only part of a routing unit', [
+                'unit' => $unit,
+                'shard_keys' => $entry['keys'],
                 'left_on' => $stranded,
                 'walking' => $walked,
                 'target' => $target,
@@ -525,6 +526,63 @@ trait Rebalanceable
         }
 
         return $left;
+    }
+
+    /**
+     * The unit the routing is kept in, for one key.
+     *
+     * The rebalance moves rows key by key, but a strategy may keep its routing
+     * coarser than that: `DbHashRangeStrategy` records a slot, and a slot is
+     * many keys. A redirect is then a statement about every key of the unit,
+     * so the passes that decide redirects — and the preflight that refuses a
+     * run which would leave part of one behind — group by this rather than
+     * by the key. For a strategy that routes per key the unit is the key, and
+     * nothing changes.
+     *
+     * @param mixed $key
+     * @param array<string, mixed> $config
+     * @return string
+     */
+    protected function routingUnit(mixed $key, array $config): string
+    {
+        return (string) $key;
+    }
+
+    /**
+     * Where each routing unit's primary rows are, across every table of the group.
+     *
+     * A unit whose keys sit on several connections has several connections
+     * here, whichever keys put them there; the callers treat that as a split
+     * they cannot decide. The first key seen stands for the unit when the
+     * routing has to be asked or told about it.
+     *
+     * @param list<ShardedTable> $tables
+     * @param list<string> $connections
+     * @param int|null $start
+     * @param int|null $end
+     * @param int $chunk
+     * @param array<string, mixed> $config
+     * @return array<string, array{key: mixed, keys: list<mixed>, connections: array<string, true>}>
+     */
+    protected function primariesByUnit(
+        array $tables,
+        array $connections,
+        ?int $start,
+        ?int $end,
+        int $chunk,
+        array $config,
+    ): array {
+        $units = [];
+
+        foreach ($this->primariesByKey($tables, $connections, $start, $end, $chunk) as $entry) {
+            $unit = $this->routingUnit($entry['key'], $config);
+
+            $units[$unit]['key'] ??= $entry['key'];
+            $units[$unit]['keys'][] = $entry['key'];
+            $units[$unit]['connections'] = ($units[$unit]['connections'] ?? []) + $entry['connections'];
+        }
+
+        return $units;
     }
 
     /**
@@ -578,12 +636,13 @@ trait Rebalanceable
      * improvement — a side effect an operator may not have asked for, and one
      * that only ever makes rows reachable.
      *
-     * A key whose rows are spread over more than one connection is not
-     * decided: it is counted as a failure and named in the log, because
-     * choosing either connection would strand the rows on the other.
-     * `keysLeftBehind()` refuses a run that would create that state, so
-     * reaching this branch means something outside this run did; it stays
-     * because the alternative is choosing silently.
+     * Decided per routing unit, see `routingUnit()`: a strategy that records
+     * a slot redirects every key of the slot at once, so a slot whose keys sit
+     * on two connections is not decided — it is counted as a failure and named
+     * in the log, because choosing either connection would strand the rows on
+     * the other. `keysLeftBehind()` refuses a run that would create that
+     * state, so reaching this branch means something outside this run did; it
+     * stays because the alternative is choosing silently.
      *
      * @param ShardingManager $manager
      * @param list<ShardedTable> $tables
@@ -591,6 +650,7 @@ trait Rebalanceable
      * @param int|null $start
      * @param int|null $end
      * @param int $chunk
+     * @param array<string, mixed> $config
      * @return array{0: array<string, array{0: mixed, 1: string}>, 1: int}
      */
     protected function redirectsFromWhereRowsAre(
@@ -600,14 +660,16 @@ trait Rebalanceable
         ?int $start,
         ?int $end,
         int $chunk,
+        array $config,
     ): array {
         $redirects = [];
         $split = 0;
 
-        foreach ($this->primariesByKey($tables, $connections, $start, $end, $chunk) as $key => $entry) {
+        foreach ($this->primariesByUnit($tables, $connections, $start, $end, $chunk, $config) as $unit => $entry) {
             if (count($entry['connections']) > 1) {
-                Log::error('A key has rows on more than one connection, so its routing cannot be decided', [
-                    'shard_key' => $key,
+                Log::error('A routing unit has rows on more than one connection, so its routing cannot be decided', [
+                    'unit' => $unit,
+                    'shard_keys' => $entry['keys'],
                     'connections' => array_keys($entry['connections']),
                 ]);
 
@@ -622,7 +684,7 @@ trait Rebalanceable
                 continue;
             }
 
-            $redirects[$key] = [$entry['key'], $connection];
+            $redirects[$unit] = [$entry['key'], $connection];
         }
 
         return [$redirects, $split];
@@ -884,48 +946,25 @@ trait Rebalanceable
     }
 
     /**
-     * The connections that keep a copy of the row once it has moved.
+     * The connections on which the copy left behind by a move belongs.
      *
-     * Without an explicit target this is the tail of the placement the routing
-     * gives — the connections the key's replicas belong on.
+     * Following the routing, the key's replicas are the placement's tail, and
+     * a source that is one of them keeps its copy as the replica. Under `--to`
+     * nothing is kept: which connections the key names afterwards is the
+     * strategy's decision inside `rowMoved()`, made after this row has moved,
+     * and a copy kept on a guess about it is a copy nothing advertises when the
+     * guess is wrong — hidden by the `is_replica = false` scope, skipped by
+     * every later walk, and never cleaned up. The source is released, and
+     * `materialisePlacements()` writes the copies the routing then names, on
+     * the source too when the strategy puts a replica back there.
      *
-     * With `--to` it cannot be, and deriving it from that one-element array
-     * deleted a copy the metadata still advertised. The operator names the
-     * primary; the strategy decides what the replicas become, and both
-     * `RedisStrategy` and `DbHashRangeStrategy` promote the old primary into
-     * the replica list when the target used to be one of its replicas. So the
-     * connections the key currently names are kept, minus the target, capped
-     * by `replica_count` — which reproduces that promotion and, with no
-     * replicas configured, keeps nothing. Whatever the strategy then decides
-     * the replicas are, `materialisePlacements()` writes.
-     *
-     * @param ShardingManager $manager
-     * @param ShardedTable $table
      * @param string|null $to
-     * @param object $row
      * @param list<string> $placement The placement this move used.
-     * @param array<string, mixed> $config
      * @return list<string>
      */
-    protected function copiesToKeep(
-        ShardingManager $manager,
-        ShardedTable $table,
-        ?string $to,
-        object $row,
-        array $placement,
-        array $config,
-    ): array {
-        if ($to === null) {
-            return array_slice($placement, 1);
-        }
-
-        $current = $this->placementFor($manager, $table, null, $row);
-
-        return array_slice(
-            array_values(array_diff($current, [$to])),
-            0,
-            (int) ($config['replica_count'] ?? 0),
-        );
+    protected function copiesToKeep(?string $to, array $placement): array
+    {
+        return $to === null ? array_slice($placement, 1) : [];
     }
 
     /**

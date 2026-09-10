@@ -5,7 +5,9 @@ namespace Allnetru\Sharding\Support;
 use Allnetru\Sharding\ShardingManager;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasOneOrMany;
+use Illuminate\Database\Eloquent\Relations\HasOneOrManyThrough;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\Str;
 
@@ -54,17 +56,32 @@ class Colocation
 
         // both sides have to resolve a key through the same map, or the same
         // value lands on different shards and nothing below holds. A group is
-        // the declaration of exactly that; outside one, the strategies are
-        // compared instead, because two tables can be configured alike
-        // without anybody having named the pair
+        // the declaration of exactly that. Outside one only a table relating
+        // to itself qualifies: a strategy that keeps its routing in metadata
+        // keeps it per table, so two tables configured alike still send the
+        // same key wherever each of them happened to record it
         $group = $this->manager->groupFor($parent);
 
         if ($group !== $this->manager->groupFor($related)) {
             return false;
         }
 
-        if ($group === null && $this->manager->strategyFor($parent) !== $this->manager->strategyFor($related)) {
+        if ($group === null && $parent->getTable() !== $related->getTable()) {
             return false;
+        }
+
+        /*
+        | Three tables, not two. A through relation's `getParent()` is the
+        | intermediate model — Laravel constructs it with the through parent —
+        | and the outer query runs on the far parent's shard, which the two
+        | checks above never looked at. A pivot is a table the relation joins
+        | that no model of the pair declares. Either way the third table has
+        | to be on the same shard as the other two, and the only shape that
+        | can promise that for three tables is all of them carrying one value
+        | of one column.
+        */
+        if ($relation instanceof HasOneOrManyThrough || $relation instanceof BelongsToMany) {
+            return $group !== null && $this->shareAValueColumn([$this->thirdTable($relation), $parent, $related], $group);
         }
 
         $parentKey = $parent->getShardKey();
@@ -72,8 +89,12 @@ class Colocation
 
         // the shared-column shape: both tables are sharded by the same column,
         // so rows carrying the same value are on the same shard. This is the
-        // shape the whole tenant_data group takes
-        if ($parentKey === $relatedKey) {
+        // shape the whole tenant_data group takes. The column has to be one
+        // both rows carry as a value rather than as their identity: a table
+        // sharded by its own primary key shares that column's name with a
+        // related row sharded by its own, and shares its value only where the
+        // relation joins the two — which is the parent-key shape below
+        if ($parentKey === $relatedKey && $parentKey !== $parent->getKeyName() && $relatedKey !== $related->getKeyName()) {
             return true;
         }
 
@@ -120,6 +141,67 @@ class Colocation
         }
 
         return $this->bare($onRelated) === $relatedKey && $this->bare($onParent) === $parentKey;
+    }
+
+    /**
+     * The table a three-table relation goes through: the far parent, or the
+     * pivot.
+     *
+     * The far parent has no accessor, so it is read through a closure bound
+     * to the relation — the same field `getRelationExistenceQuery()` compiles
+     * the subquery against. The pivot comes back as an instance of the class
+     * `using()` named, or Laravel's plain `Pivot` when none was, with the
+     * relation's table set on it.
+     *
+     * @param HasOneOrManyThrough<*, *, *, *>|BelongsToMany<*, *, *> $relation
+     * @return Model
+     */
+    protected function thirdTable(HasOneOrManyThrough|BelongsToMany $relation): Model
+    {
+        if ($relation instanceof BelongsToMany) {
+            return $relation->newPivot();
+        }
+
+        /** @var Model */
+        return (fn (): Model => $this->farParent)->call($relation);
+    }
+
+    /**
+     * Do these models all shard by one column none of them uses as its key?
+     *
+     * The shared-column shape, asked of three tables at once: every one in the
+     * group, every one sharded by the same column, and that column a value
+     * each row carries rather than any row's identity. A plain `Pivot` fails
+     * it — it declares no shard key — and so does a global pivot, which is
+     * the answer the docs give: colocate all three, or ask in two steps.
+     *
+     * @param list<Model> $models
+     * @param string $group
+     * @return bool
+     */
+    protected function shareAValueColumn(array $models, string $group): bool
+    {
+        $column = null;
+
+        foreach ($models as $model) {
+            if (!$this->manager->isShardable($model) || $this->manager->groupFor($model) !== $group) {
+                return false;
+            }
+
+            if (!method_exists($model, 'getShardKey')) {
+                return false;
+            }
+
+            $key = $model->getShardKey();
+
+            if ($key === $model->getKeyName() || ($column !== null && $key !== $column)) {
+                return false;
+            }
+
+            $column = $key;
+        }
+
+        return true;
     }
 
     /**

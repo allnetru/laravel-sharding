@@ -137,11 +137,17 @@ final class RoutingCache
      * The namespace a strategy's routing lives under.
      *
      * The scope the metadata is stored under, plus a fingerprint of the
-     * connection list and the replica count. A placement is only meaningful
-     * against the topology it was computed for: add a shard and every hashed
-     * fallback changes, and a cache that did not know would go on answering for
-     * the old list until it expired — with two processes, one warm and one
-     * cold, disagreeing about where a new row belongs.
+     * connections as configured and the replica count. A placement is only
+     * meaningful against the topology it was computed for: add a shard, or
+     * change one's weight, and every hashed fallback changes, and a cache that
+     * did not know would go on answering for the old list until it expired —
+     * with two processes, one warm and one cold, disagreeing about where a new
+     * row belongs.
+     *
+     * The configuration has to be the one the strategy routes by, which is
+     * what `ShardingManager::strategyFor()` hands out: the reader and the
+     * writer of an entry must agree on the namespace, or a handover written
+     * through under one list is invisible to reads made under another.
      *
      * @param array<string, mixed> $config The strategy's configuration.
      * @return string
@@ -149,10 +155,10 @@ final class RoutingCache
     public static function namespaceFor(array $config): string
     {
         $scope = (string) ($config['group'] ?? $config['table'] ?? '');
-        $names = array_keys((array) ($config['connections'] ?? []));
-        sort($names);
+        $connections = (array) ($config['connections'] ?? []);
+        ksort($connections);
 
-        $topology = substr(sha1(json_encode([$names, (int) ($config['replica_count'] ?? 0)]) ?: ''), 0, 12);
+        $topology = substr(sha1(json_encode([$connections, (int) ($config['replica_count'] ?? 0)]) ?: ''), 0, 12);
 
         return "{$scope}@{$topology}";
     }
