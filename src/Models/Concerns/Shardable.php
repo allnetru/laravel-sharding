@@ -35,6 +35,20 @@ use InvalidArgumentException;
 trait Shardable
 {
     /**
+     * Clause keywords that can follow a source without being its name.
+     *
+     * A derived table need not be aliased at all on every database, and what
+     * comes after it is then the next clause rather than a name.
+     *
+     * @var list<string>
+     */
+    protected const NOT_AN_ALIAS = [
+        'join', 'inner', 'left', 'right', 'full', 'cross', 'natural', 'lateral',
+        'on', 'using', 'where', 'group', 'order', 'limit', 'offset', 'having',
+        'union', 'intersect', 'except', 'for', 'window', 'fetch',
+    ];
+
+    /**
      * @var array<int, string>
      */
     public array $replicaConnections = [];
@@ -61,12 +75,97 @@ trait Shardable
             return $q->qualifyColumn('is_replica');
         }
 
-        // `(…) as alias`, which is how a derived table is given a name
+        /*
+        | The alias of the FIRST source, which is the derived table itself.
+        | A raw FROM can name several — `(…) as parcels, lateral … as d` —
+        | and the last one belongs to a lateral join that carries none of the
+        | model's columns. So the scan stops at the parenthesis that closes
+        | the first source rather than reading to the end of the string.
+        */
         $expression = (string) $from->getValue($q->getQuery()->getGrammar());
+        $alias = $this->firstSourceAlias($expression);
 
-        return preg_match('/\)\s*(?:as\s+)?"?([A-Za-z_][A-Za-z0-9_]*)"?\s*$/i', $expression, $found) === 1
-            ? $found[1] . '.is_replica'
-            : 'is_replica';
+        return $alias === null ? 'is_replica' : $alias . '.is_replica';
+    }
+
+    /**
+     * The alias the first source of a raw FROM declares, if any.
+     *
+     * Quoted text is skipped rather than scanned: a parenthesis inside a
+     * string literal is data, and counting it would end the source early.
+     *
+     * @param string $expression The raw FROM, as written.
+     *
+     * @return string|null
+     */
+    protected function firstSourceAlias(string $expression): ?string
+    {
+        $depth = 0;
+        $quote = null;
+        $length = strlen($expression);
+
+        for ($position = 0; $position < $length; $position++) {
+            $character = $expression[$position];
+
+            if ($quote !== null) {
+                // a doubled quote is an escaped one and the literal goes on
+                if ($character === $quote && ($expression[$position + 1] ?? '') === $quote) {
+                    $position++;
+
+                    continue;
+                }
+
+                if ($character === $quote) {
+                    $quote = null;
+                }
+
+                continue;
+            }
+
+            if ($character === "'" || $character === '"') {
+                $quote = $character;
+
+                continue;
+            }
+
+            if ($character === '(') {
+                $depth++;
+
+                continue;
+            }
+
+            if ($character !== ')') {
+                continue;
+            }
+
+            if (--$depth !== 0) {
+                continue;
+            }
+
+            return $this->aliasAfter(substr($expression, $position + 1));
+        }
+
+        return null;
+    }
+
+    /**
+     * The name a source gives itself, out of what follows it.
+     *
+     * @param string $tail Everything after the source.
+     *
+     * @return string|null Null when what follows is a clause rather than a name.
+     */
+    protected function aliasAfter(string $tail): ?string
+    {
+        if (preg_match('/^\s*as\s+"?([A-Za-z_][A-Za-z0-9_]*)"?/i', $tail, $found) === 1) {
+            return $found[1];
+        }
+
+        if (preg_match('/^\s*"?([A-Za-z_][A-Za-z0-9_]*)"?/', $tail, $found) !== 1) {
+            return null;
+        }
+
+        return in_array(strtolower($found[1]), self::NOT_AN_ALIAS, true) ? null : $found[1];
     }
 
     /**

@@ -98,6 +98,63 @@ class ShardFromRawTest extends TestCase
 
         $this->assertSame([42], $rows->pluck('measured')->map(intval(...))->all());
     }
+
+    public function testALateralJoinDoesNotStealTheAlias(): void
+    {
+        $shard = app(ShardingManager::class)->connectionFor(new DerivedOrder(), 7)[0];
+        DB::connection($shard)->table('orders')->insert(['id' => 1, 'tenant_id' => 7, 'value' => 42]);
+
+        // two sources, and only the first carries the model's columns: the
+        // replica filter must not name the lateral one
+        $rows = DerivedOrder::query()
+            ->where('orders.tenant_id', 7)
+            ->fromRaw(
+                '(select id, tenant_id, is_replica, value from orders where tenant_id = ?) as orders,'
+                . ' (select 1 as one) as d',
+                [7],
+            )
+            ->selectRaw('orders.value as measured')
+            ->get();
+
+        $this->assertSame([42], $rows->pluck('measured')->map(intval(...))->all());
+    }
+
+    public function testAParenthesisInsideALiteralIsNotTheEndOfTheSource(): void
+    {
+        $shard = app(ShardingManager::class)->connectionFor(new DerivedOrder(), 7)[0];
+        DB::connection($shard)->table('orders')->insert(['id' => 1, 'tenant_id' => 7, 'value' => 42]);
+
+        $rows = DerivedOrder::query()
+            ->where('orders.tenant_id', 7)
+            ->fromRaw(
+                "(select id, tenant_id, is_replica, value, ')' as marker from orders where tenant_id = ?) as orders",
+                [7],
+            )
+            ->selectRaw('orders.value as measured')
+            ->get();
+
+        $this->assertSame([42], $rows->pluck('measured')->map(intval(...))->all());
+    }
+
+    public function testAClauseFollowingAnAliaslessSourceIsNotItsName(): void
+    {
+        $shard = app(ShardingManager::class)->connectionFor(new DerivedOrder(), 7)[0];
+        DB::connection($shard)->table('orders')->insert(['id' => 1, 'tenant_id' => 7, 'value' => 42]);
+        DB::connection($shard)->table('order_items')->insert(['id' => 1, 'tenant_id' => 7, 'order_id' => 1]);
+
+        // no alias on the derived table, so `join` is a clause and the filter
+        // stays unqualified rather than naming a source that does not exist
+        $rows = DerivedOrder::query()
+            ->fromRaw(
+                '(select orders.id as ordered, orders.value from orders where tenant_id = ?)'
+                . ' join order_items on order_items.order_id = ordered',
+                [7],
+            )
+            ->selectRaw('value as measured')
+            ->get();
+
+        $this->assertSame([42], $rows->pluck('measured')->map(intval(...))->all());
+    }
 }
 
 class DerivedOrder extends Model
