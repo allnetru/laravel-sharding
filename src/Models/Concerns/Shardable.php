@@ -75,7 +75,24 @@ trait Shardable
     }
 
     /**
+     * Clause keywords that can follow a source without being its name.
+     *
+     * A derived table need not be aliased at all on every database, and what
+     * comes after it is then the next clause rather than a name.
+     *
+     * @var list<string>
+     */
+    protected const NOT_AN_ALIAS = [
+        'join', 'inner', 'left', 'right', 'full', 'cross', 'natural', 'lateral',
+        'on', 'using', 'where', 'group', 'order', 'limit', 'offset', 'having',
+        'union', 'intersect', 'except', 'for', 'window', 'fetch',
+    ];
+
+    /**
      * The alias the first source of a raw FROM declares, if any.
+     *
+     * Quoted text is skipped rather than scanned: a parenthesis inside a
+     * string literal is data, and counting it would end the source early.
      *
      * @param string $expression The raw FROM, as written.
      *
@@ -84,8 +101,33 @@ trait Shardable
     protected function firstSourceAlias(string $expression): ?string
     {
         $depth = 0;
+        $quote = null;
+        $length = strlen($expression);
 
-        foreach (str_split($expression) as $position => $character) {
+        for ($position = 0; $position < $length; $position++) {
+            $character = $expression[$position];
+
+            if ($quote !== null) {
+                // a doubled quote is an escaped one and the literal goes on
+                if ($character === $quote && ($expression[$position + 1] ?? '') === $quote) {
+                    $position++;
+
+                    continue;
+                }
+
+                if ($character === $quote) {
+                    $quote = null;
+                }
+
+                continue;
+            }
+
+            if ($character === "'" || $character === '"') {
+                $quote = $character;
+
+                continue;
+            }
+
             if ($character === '(') {
                 $depth++;
 
@@ -96,21 +138,34 @@ trait Shardable
                 continue;
             }
 
-            $depth--;
-
-            if ($depth !== 0) {
+            if (--$depth !== 0) {
                 continue;
             }
 
-            // what follows the closing parenthesis: `as name`, or just `name`
-            return preg_match(
-                '/^\s*(?:as\s+)?"?([A-Za-z_][A-Za-z0-9_]*)"?/i',
-                substr($expression, $position + 1),
-                $found,
-            ) === 1 ? $found[1] : null;
+            return $this->aliasAfter(substr($expression, $position + 1));
         }
 
         return null;
+    }
+
+    /**
+     * The name a source gives itself, out of what follows it.
+     *
+     * @param string $tail Everything after the source.
+     *
+     * @return string|null Null when what follows is a clause rather than a name.
+     */
+    protected function aliasAfter(string $tail): ?string
+    {
+        if (preg_match('/^\s*as\s+"?([A-Za-z_][A-Za-z0-9_]*)"?/i', $tail, $found) === 1) {
+            return $found[1];
+        }
+
+        if (preg_match('/^\s*"?([A-Za-z_][A-Za-z0-9_]*)"?/', $tail, $found) !== 1) {
+            return null;
+        }
+
+        return in_array(strtolower($found[1]), self::NOT_AN_ALIAS, true) ? null : $found[1];
     }
 
     /**
