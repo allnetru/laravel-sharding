@@ -24,7 +24,9 @@ use Illuminate\Support\Str;
 use InvalidArgumentException;
 
 /**
- * @method static Builder withoutReplicas()
+ * @method static ShardBuilder withoutReplicas()
+ * @method static ShardBuilder query()
+ * @method static ShardBuilder onShardConnection(string $connection)
  */
 trait Shardable
 {
@@ -439,10 +441,15 @@ trait Shardable
     /**
      * Create a new Eloquent query builder for the model.
      *
+     * Typed as what it returns, so a shardable model's query is known to
+     * carry the builder's own methods — `onShardConnection()`, and a
+     * transaction on the shard the key names. Declared as the base builder,
+     * static analysis saw none of them and called every one undefined.
+     *
      * @param \Illuminate\Database\Query\Builder $query
-     * @return Builder
+     * @return ShardBuilder
      */
-    public function newEloquentBuilder($query): Builder
+    public function newEloquentBuilder($query): ShardBuilder
     {
         return (new ShardBuilder($query))->setModel($this);
     }
