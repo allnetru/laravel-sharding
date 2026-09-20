@@ -139,7 +139,6 @@ class ShardRawTest extends TestCase
 
         (new RawOrder())->transaction(static fn () => null);
     }
-
 }
 
 class RawOrder extends Model
