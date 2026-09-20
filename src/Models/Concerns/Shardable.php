@@ -35,6 +35,20 @@ use InvalidArgumentException;
 trait Shardable
 {
     /**
+     * Clause keywords that can follow a source without being its name.
+     *
+     * A derived table need not be aliased at all on every database, and what
+     * comes after it is then the next clause rather than a name.
+     *
+     * @var list<string>
+     */
+    protected const NOT_AN_ALIAS = [
+        'join', 'inner', 'left', 'right', 'full', 'cross', 'natural', 'lateral',
+        'on', 'using', 'where', 'group', 'order', 'limit', 'offset', 'having',
+        'union', 'intersect', 'except', 'for', 'window', 'fetch',
+    ];
+
+    /**
      * @var array<int, string>
      */
     public array $replicaConnections = [];
@@ -73,20 +87,6 @@ trait Shardable
 
         return $alias === null ? 'is_replica' : $alias . '.is_replica';
     }
-
-    /**
-     * Clause keywords that can follow a source without being its name.
-     *
-     * A derived table need not be aliased at all on every database, and what
-     * comes after it is then the next clause rather than a name.
-     *
-     * @var list<string>
-     */
-    protected const NOT_AN_ALIAS = [
-        'join', 'inner', 'left', 'right', 'full', 'cross', 'natural', 'lateral',
-        'on', 'using', 'where', 'group', 'order', 'limit', 'offset', 'having',
-        'union', 'intersect', 'except', 'for', 'window', 'fetch',
-    ];
 
     /**
      * The alias the first source of a raw FROM declares, if any.
