@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.5.4 - 2026-09-20
+
+### Fixed
+
+- **A derived table survives the per-shard copy.** `replicateForConnection()` calls Laravel's `setModel()`, which writes the model's table into `from` unconditionally — so a `fromRaw()` (a CTE, a VALUES list, a subquery) was thrown away while the bindings it came with were kept. What ran was the plain table with more placeholders than values, and Postgres answered `SQLSTATE[HY093] Invalid parameter number`, naming neither the clause that was lost nor the call that lost it.
+- **The replica filter names the right table.** `scopeWithoutReplicas()` qualified `is_replica` with the model's table, which a derived-table query never mentions. It now takes the derived table's own alias when it has one, and the model's table otherwise — a join putting two `is_replica` in scope is no longer ambiguous.
+
+### Changed
+
+- **The builder says what it is.** `newEloquentBuilder()` returns a `ShardBuilder` and was documented only as the base `Builder`, so static analysis in an application called `onShardConnection()` and `transaction()` undefined. The annotations name it, keeping the model parameter — `Builder<static>&ShardBuilder` — so nothing chained after `query()` loses its type. The native return type is unchanged: it is a Laravel extension point.
+
 ## v0.5.3 - 2026-09-20
 
 ### Added
