@@ -1119,6 +1119,24 @@ class ShardBuilder extends EloquentBuilder
     }
 
     /**
+     * Run a callback inside a transaction on the shard this query is pinned to.
+     *
+     * The same rule as the raw statements: the query names its shard key with
+     * one value, or it is refused.
+     *
+     * @param Closure $callback The work, given the connection.
+     * @param int $attempts How many times to retry on a deadlock.
+     *
+     * @return mixed What the callback returned.
+     *
+     * @throws UnsupportedCrossShardQuery When the query is not pinned to one shard.
+     */
+    public function transaction(Closure $callback, int $attempts = 1): mixed
+    {
+        return $this->rawConnection('transaction')->transaction($callback, $attempts);
+    }
+
+    /**
      * The one connection a raw statement may run on.
      *
      * `onShardConnection()` names it outright. Otherwise the query's own

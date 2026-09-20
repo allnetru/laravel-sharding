@@ -276,6 +276,10 @@ names a connection, and it needs no replica filter: a replica row never lives
 on the primary of its key. Use `onShardConnection()` to name a connection
 outright, for tooling that walks the shards on purpose.
 
+A transaction is a connection too, so it goes the same way: `$parcel->transaction(fn () => …)` on a
+row, or `Parcel::query()->where('tenant_id', $tenantId)->transaction(fn () => …)` on the builder —
+never `DB::transaction()`, which opens on the default connection.
+
 ### Running under Swoole
 
 When the PHP process is executed inside a Swoole coroutine context (for example,

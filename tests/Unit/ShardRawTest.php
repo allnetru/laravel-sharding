@@ -109,6 +109,37 @@ class ShardRawTest extends TestCase
 
         $this->assertSame(5, (int) $row->value);
     }
+
+    public function testATransactionOpensOnTheRowsShardAndRollsBack(): void
+    {
+        $shard = $this->shardOf(7);
+        DB::connection($shard)->table('orders')->insert(['id' => 1, 'tenant_id' => 7, 'value' => 1]);
+
+        try {
+            RawOrder::query()->where('tenant_id', 7)->transaction(static function (): void {
+                RawOrder::query()->where('tenant_id', 7)->where('id', 1)->update(['value' => 100]);
+
+                throw new \RuntimeException('roll it back');
+            });
+        } catch (\RuntimeException) {
+            // expected
+        }
+
+        $this->assertSame(1, (int) DB::connection($shard)->table('orders')->where('id', 1)->value('value'));
+
+        $order = RawOrder::query()->where('tenant_id', 7)->where('id', 1)->firstOrFail();
+        $order->transaction(static fn () => RawOrder::query()->where('tenant_id', 7)->where('id', 1)->update(['value' => 5]));
+
+        $this->assertSame(5, (int) DB::connection($shard)->table('orders')->where('id', 1)->value('value'));
+    }
+
+    public function testATransactionOnAKeylessRowIsRefused(): void
+    {
+        $this->expectException(UnsupportedCrossShardQuery::class);
+
+        (new RawOrder())->transaction(static fn () => null);
+    }
+
 }
 
 class RawOrder extends Model
