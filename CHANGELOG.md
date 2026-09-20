@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.5.2 - 2026-09-20
+
+### Added
+
+* **Raw SQL routed by the query's own shard key.** `rawSelect()`, `rawSelectOne()`, `rawStatement()` and `rawAffectingStatement()` on the builder run SQL the builder cannot spell — a CTE, a window function, an `update … from`, a PostGIS statement over two tables of one group — on the primary the query's `where(shardKey, …)` pins it to. Without a key, or with two values of it, they refuse with `UnsupportedCrossShardQuery` rather than guess. Applications used to pick the connection themselves, and a fresh model's connection is the first configured shard: a statement for a tenant on the second shard ran on the first, touched no rows and raised nothing.
+
 ## v0.5.0 - 2026-09-09
 
 ### What's Changed

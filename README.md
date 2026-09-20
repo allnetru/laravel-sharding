@@ -250,6 +250,32 @@ $partners = Organization::where('status', OrganizationStatus::partner)
 
 Insertions also resolve the target shard automatically. If you omit the primary key the configured ID generator assigns one before the record is saved.
 
+### SQL the builder cannot spell
+
+A CTE, a window function, an `update … from`, a PostGIS statement over two
+tables of one colocation group: when the query builder has no words for it,
+run it through the builder anyway, and let the query's own shard key say where
+it goes.
+
+```php
+$rows = Parcel::query()
+    ->where('tenant_id', $tenantId)
+    ->rawSelect('with hull as (...) select ... from parcels where tenant_id = ?', [$tenantId]);
+
+$changed = Parcel::query()
+    ->where('tenant_id', $tenantId)
+    ->rawAffectingStatement('update parcels set geom = ... where tenant_id = ? and id = ?', [$tenantId, $id]);
+```
+
+`rawSelect()`, `rawSelectOne()`, `rawStatement()` and `rawAffectingStatement()`
+run on the primary the `where(shardKey, …)` pins the query to. Without a key,
+or with two values of it, they throw `UnsupportedCrossShardQuery` instead of
+guessing: SQL the package cannot read cannot be merged across shards. The SQL
+still filters by the key itself — a shard holds many keys — but it never
+names a connection, and it needs no replica filter: a replica row never lives
+on the primary of its key. Use `onShardConnection()` to name a connection
+outright, for tooling that walks the shards on purpose.
+
 ### Running under Swoole
 
 When the PHP process is executed inside a Swoole coroutine context (for example,

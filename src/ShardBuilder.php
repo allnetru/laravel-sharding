@@ -8,11 +8,13 @@ use Allnetru\Sharding\Support\Coroutine\CoroutineDispatcher;
 use ArrayIterator;
 use Closure;
 use Generator;
+use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Query\Expression;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Pagination\Paginator;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\LazyCollection;
 use Illuminate\Support\Str;
 use Iterator;
@@ -1036,6 +1038,118 @@ class ShardBuilder extends EloquentBuilder
             'path' => Paginator::resolveCurrentPath(),
             'pageName' => $pageName,
         ]);
+    }
+
+    /**
+     * Run SQL the builder cannot spell, on the shard this query is pinned to.
+     *
+     * A CTE, a window function, an `update … from`, a PostGIS statement over
+     * two tables of one colocation group — the builder has no words for
+     * them, and the alternative was `DB::connection()` with a name the
+     * application worked out for itself. That is knowledge of the sharding
+     * living in application code, and it has already been wrong in the usual
+     * way: a fresh model's connection is the first configured shard, so a
+     * statement written against it ran on shard one for a tenant on shard two,
+     * touched no rows and raised nothing.
+     *
+     * The rule is the one `get()` already lives by: the query names its shard
+     * key with one value, and that value says where the rows are. Nothing
+     * else is accepted — not a fan-out, because SQL the package cannot read
+     * cannot be merged, and not a guess. Only the primary is used, so the
+     * replica filter the per-shard copies carry is not needed here: a replica
+     * row never lives on the primary of its key.
+     *
+     * The bindings and the SQL are the caller's; the connection is not.
+     *
+     * @param string $sql The statement.
+     * @param array<int|string, mixed> $bindings Its bindings.
+     *
+     * @return list<object> The rows.
+     *
+     * @throws UnsupportedCrossShardQuery When the query is not pinned to one shard.
+     */
+    public function rawSelect(string $sql, array $bindings = []): array
+    {
+        return $this->rawConnection('rawSelect')->select($sql, $bindings);
+    }
+
+    /**
+     * One row of SQL the builder cannot spell, on the shard this query is pinned to.
+     *
+     * @param string $sql The statement.
+     * @param array<int|string, mixed> $bindings Its bindings.
+     *
+     * @return object|null
+     *
+     * @throws UnsupportedCrossShardQuery When the query is not pinned to one shard.
+     */
+    public function rawSelectOne(string $sql, array $bindings = []): ?object
+    {
+        return $this->rawConnection('rawSelectOne')->selectOne($sql, $bindings);
+    }
+
+    /**
+     * A statement the builder cannot spell, on the shard this query is pinned to.
+     *
+     * @param string $sql The statement.
+     * @param array<int|string, mixed> $bindings Its bindings.
+     *
+     * @return bool
+     *
+     * @throws UnsupportedCrossShardQuery When the query is not pinned to one shard.
+     */
+    public function rawStatement(string $sql, array $bindings = []): bool
+    {
+        return $this->rawConnection('rawStatement')->statement($sql, $bindings);
+    }
+
+    /**
+     * A statement that changes rows, on the shard this query is pinned to.
+     *
+     * @param string $sql The statement.
+     * @param array<int|string, mixed> $bindings Its bindings.
+     *
+     * @return int How many rows it changed.
+     *
+     * @throws UnsupportedCrossShardQuery When the query is not pinned to one shard.
+     */
+    public function rawAffectingStatement(string $sql, array $bindings = []): int
+    {
+        return $this->rawConnection('rawAffectingStatement')->affectingStatement($sql, $bindings);
+    }
+
+    /**
+     * The one connection a raw statement may run on.
+     *
+     * `onShardConnection()` names it outright. Otherwise the query's own
+     * `where`s have to pin it, through the same reading `get()` uses, and to
+     * exactly one primary: two values of the key are two shards, and a
+     * statement the package cannot read cannot be merged back.
+     *
+     * @param string $method The caller, for the message.
+     *
+     * @return ConnectionInterface
+     *
+     * @throws UnsupportedCrossShardQuery
+     */
+    protected function rawConnection(string $method): ConnectionInterface
+    {
+        if ($this->singleConnection) {
+            return $this->getQuery()->getConnection();
+        }
+
+        $pinned = $this->connectionsFromShardKey(
+            app(ShardingManager::class)->connectionsFor($this->getModel()),
+        );
+
+        if ($pinned === null || count($pinned) !== 1) {
+            throw new UnsupportedCrossShardQuery(sprintf(
+                '%s() runs on one shard, and this query does not name one: give the shard key a single value with where(), or pick the connection with onShardConnection().',
+                $method,
+            ));
+        }
+
+        return DB::connection((string) array_key_first($pinned));
     }
 
     /**
