@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.5.2 - 2026-09-20
+
+### Added
+
+- `Shardable::transaction()` and `ShardBuilder::transaction()` — a transaction on the shard the key names. `DB::transaction()` opens on the default connection, which on a sharded schema wraps nothing the callback touches: the writes inside go to the shard their own key names and commit one by one regardless. Both refuse to run without a shard named — a row carries its key, a query pins one with `where(shardKey, …)` or `onShardConnection()` — because two values of the key are two shards and a transaction does not span them. A key of `0` is a key like any other; only `null` and `''` count as absent.
+
 ## v0.5.1 - 2026-09-10
 
 Nine findings from two review rounds on 0.5.0, each fixed with a test that fails on the unfixed code (checked by mutating the fix back and running the test).
