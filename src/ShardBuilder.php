@@ -350,7 +350,22 @@ class ShardBuilder extends EloquentBuilder
         $query = clone $this->getQuery();
         $query->connection = $model->getConnection();
         $builder = new self($query);
+
+        /*
+        | setModel() writes the model's table into `from` unconditionally,
+        | which silently threw away a fromRaw() — a derived table, a CTE, a
+        | VALUES list — while keeping the bindings it came with. The query
+        | then read the plain table with the wrong number of placeholders,
+        | and Postgres answered «Invalid parameter number», naming neither
+        | the clause nor the call. So the clause is put back afterwards.
+        */
+        $from = $query->from;
+        $bindings = $query->bindings['from'];
+
         $builder->setModel($model);
+
+        $query->from = $from;
+        $query->bindings['from'] = $bindings;
         $builder->singleConnection = true;
         $builder->withoutReplicas();
         $builder->setEagerLoads($this->getEagerLoads());

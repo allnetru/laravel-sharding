@@ -73,7 +73,18 @@ trait Shardable
      */
     public function scopeWithoutReplicas(Builder $q): Builder
     {
-        return $q->where($q->qualifyColumn('is_replica'), false);
+        /*
+        | Qualified only when the query still reads the model's own table.
+        | A query given a derived table by fromRaw() — a CTE, a VALUES list —
+        | reads something else entirely, and naming the model's table there
+        | asks for a column of a table the statement never mentions.
+        */
+        $from = $q->getQuery()->from;
+        $column = is_string($from) && $from === $this->getTable()
+            ? $q->qualifyColumn('is_replica')
+            : 'is_replica';
+
+        return $q->where($column, false);
     }
 
     /**
