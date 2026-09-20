@@ -24,9 +24,13 @@ use Illuminate\Support\Str;
 use InvalidArgumentException;
 
 /**
- * @method static ShardBuilder withoutReplicas()
- * @method static ShardBuilder query()
- * @method static ShardBuilder onShardConnection(string $connection)
+ * The model parameter is kept in every one of these: an unparameterised
+ * ShardBuilder would discard `Builder<static>` and infer a bare Model for
+ * everything chained after it.
+ *
+ * @method static Builder<static>&ShardBuilder withoutReplicas()
+ * @method static Builder<static>&ShardBuilder query()
+ * @method static Builder<static>&ShardBuilder onShardConnection(string $connection)
  */
 trait Shardable
 {
