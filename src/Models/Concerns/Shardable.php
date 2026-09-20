@@ -24,7 +24,13 @@ use Illuminate\Support\Str;
 use InvalidArgumentException;
 
 /**
- * @method static Builder withoutReplicas()
+ * The model parameter is kept in every one of these: an unparameterised
+ * ShardBuilder would discard `Builder<static>` and infer a bare Model for
+ * everything chained after it.
+ *
+ * @method static Builder<static>&ShardBuilder withoutReplicas()
+ * @method static Builder<static>&ShardBuilder query()
+ * @method static Builder<static>&ShardBuilder onShardConnection(string $connection)
  */
 trait Shardable
 {
@@ -439,8 +445,18 @@ trait Shardable
     /**
      * Create a new Eloquent query builder for the model.
      *
+     * Documented as what it returns, so a shardable model's query is known
+     * to carry the builder's own methods — `onShardConnection()`, and a
+     * transaction on the shard the key names. Declared only as the base
+     * builder, static analysis saw none of them and called every one
+     * undefined.
+     *
+     * The native type stays the base builder: this is a Laravel extension
+     * point, and narrowing it would stop a model overriding it with a
+     * ShardBuilder subclass of its own.
+     *
      * @param \Illuminate\Database\Query\Builder $query
-     * @return Builder
+     * @return ShardBuilder
      */
     public function newEloquentBuilder($query): Builder
     {
