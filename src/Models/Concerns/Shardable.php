@@ -2,6 +2,7 @@
 
 namespace Allnetru\Sharding\Models\Concerns;
 
+use Allnetru\Sharding\Exceptions\UnsupportedCrossShardQuery;
 use Allnetru\Sharding\IdGenerator;
 use Allnetru\Sharding\Relations\ShardBelongsTo;
 use Allnetru\Sharding\Relations\ShardBelongsToMany;
@@ -15,6 +16,7 @@ use Allnetru\Sharding\Relations\ShardMorphTo;
 use Allnetru\Sharding\Relations\ShardMorphToMany;
 use Allnetru\Sharding\ShardBuilder;
 use Allnetru\Sharding\ShardingManager;
+use Closure;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -30,6 +32,38 @@ trait Shardable
      * @var array<int, string>
      */
     public array $replicaConnections = [];
+
+    /**
+     * Run a callback inside a transaction on this row's shard.
+     *
+     * A transaction lives on one connection, and the connection is the shard
+     * the row's key names — not the default one `DB::transaction()` opens,
+     * which on a sharded schema wraps nothing the callback touches. The
+     * application used to spell the connection itself, which is exactly the
+     * knowledge it should not have.
+     *
+     * @param Closure $callback The work.
+     * @param int $attempts How many times to retry on a deadlock.
+     *
+     * @return mixed What the callback returned.
+     *
+     * @throws UnsupportedCrossShardQuery When the row carries no shard key yet.
+     */
+    public function transaction(Closure $callback, int $attempts = 1): mixed
+    {
+        $key = $this->getAttribute($this->getShardKey());
+
+        // null and '' only: 0 is a key the builder pins on like any other,
+        // and a truthiness check would refuse the row that carries it
+        if ($key === null || $key === '') {
+            throw new UnsupportedCrossShardQuery(sprintf(
+                '%s::transaction() needs the shard key set: a row without one names no shard to open a transaction on.',
+                static::class,
+            ));
+        }
+
+        return $this->getConnection()->transaction($callback, $attempts);
+    }
 
     /**
      * @param Builder $q
