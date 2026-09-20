@@ -34,6 +34,36 @@ trait Shardable
     public array $replicaConnections = [];
 
     /**
+     * How to name `is_replica` in this query.
+     *
+     * The model's table while the query still reads it. A query given a
+     * derived table by `fromRaw()` — a CTE, a VALUES list — reads something
+     * else, and naming the model's table there asks for a column of a table
+     * the statement never mentions. The derived table's own alias is used
+     * when it has one, because a join then has two `is_replica` to choose
+     * between and a bare name is ambiguous.
+     *
+     * @param Builder $q The query.
+     *
+     * @return string
+     */
+    protected function replicaColumn(Builder $q): string
+    {
+        $from = $q->getQuery()->from;
+
+        if (is_string($from)) {
+            return $q->qualifyColumn('is_replica');
+        }
+
+        // `(…) as alias`, which is how a derived table is given a name
+        $expression = (string) $from->getValue($q->getQuery()->getGrammar());
+
+        return preg_match('/\)\s*(?:as\s+)?"?([A-Za-z_][A-Za-z0-9_]*)"?\s*$/i', $expression, $found) === 1
+            ? $found[1] . '.is_replica'
+            : 'is_replica';
+    }
+
+    /**
      * Run a callback inside a transaction on this row's shard.
      *
      * A transaction lives on one connection, and the connection is the shard
@@ -73,18 +103,7 @@ trait Shardable
      */
     public function scopeWithoutReplicas(Builder $q): Builder
     {
-        /*
-        | Qualified only when the query still reads the model's own table.
-        | A query given a derived table by fromRaw() — a CTE, a VALUES list —
-        | reads something else entirely, and naming the model's table there
-        | asks for a column of a table the statement never mentions.
-        */
-        $from = $q->getQuery()->from;
-        $column = is_string($from) && $from === $this->getTable()
-            ? $q->qualifyColumn('is_replica')
-            : 'is_replica';
-
-        return $q->where($column, false);
+        return $q->where($this->replicaColumn($q), false);
     }
 
     /**

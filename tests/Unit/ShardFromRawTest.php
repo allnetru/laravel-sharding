@@ -40,6 +40,13 @@ class ShardFromRawTest extends TestCase
                 $table->integer('value');
                 $table->boolean('is_replica')->default(false);
             });
+
+            Schema::connection($connection)->create('order_items', function (Blueprint $table): void {
+                $table->unsignedBigInteger('id')->primary();
+                $table->unsignedBigInteger('tenant_id');
+                $table->unsignedBigInteger('order_id');
+                $table->boolean('is_replica')->default(false);
+            });
         }
     }
 
@@ -73,6 +80,23 @@ class ShardFromRawTest extends TestCase
             ->get();
 
         $this->assertSame([11, 12], $rows->pluck('measured')->map(intval(...))->sort()->values()->all());
+    }
+
+    public function testTheReplicaFilterTakesTheDerivedTablesAlias(): void
+    {
+        $shard = app(ShardingManager::class)->connectionFor(new DerivedOrder(), 7)[0];
+        DB::connection($shard)->table('orders')->insert(['id' => 1, 'tenant_id' => 7, 'value' => 42]);
+        DB::connection($shard)->table('order_items')->insert(['id' => 1, 'tenant_id' => 7, 'order_id' => 1]);
+
+        // both sides carry is_replica, so a bare name would be ambiguous
+        $rows = DerivedOrder::query()
+            ->where('orders.tenant_id', 7)
+            ->fromRaw('(select id, tenant_id, is_replica, value from orders where tenant_id = ?) as orders', [7])
+            ->join('order_items', 'order_items.order_id', '=', 'orders.id')
+            ->selectRaw('orders.value as measured')
+            ->get();
+
+        $this->assertSame([42], $rows->pluck('measured')->map(intval(...))->all());
     }
 }
 
