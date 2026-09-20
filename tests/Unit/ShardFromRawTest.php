@@ -98,6 +98,26 @@ class ShardFromRawTest extends TestCase
 
         $this->assertSame([42], $rows->pluck('measured')->map(intval(...))->all());
     }
+
+    public function testALateralJoinDoesNotStealTheAlias(): void
+    {
+        $shard = app(ShardingManager::class)->connectionFor(new DerivedOrder(), 7)[0];
+        DB::connection($shard)->table('orders')->insert(['id' => 1, 'tenant_id' => 7, 'value' => 42]);
+
+        // two sources, and only the first carries the model's columns: the
+        // replica filter must not name the lateral one
+        $rows = DerivedOrder::query()
+            ->where('orders.tenant_id', 7)
+            ->fromRaw(
+                '(select id, tenant_id, is_replica, value from orders where tenant_id = ?) as orders,'
+                . ' (select 1 as one) as d',
+                [7],
+            )
+            ->selectRaw('orders.value as measured')
+            ->get();
+
+        $this->assertSame([42], $rows->pluck('measured')->map(intval(...))->all());
+    }
 }
 
 class DerivedOrder extends Model

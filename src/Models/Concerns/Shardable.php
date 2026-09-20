@@ -61,12 +61,56 @@ trait Shardable
             return $q->qualifyColumn('is_replica');
         }
 
-        // `(…) as alias`, which is how a derived table is given a name
+        /*
+        | The alias of the FIRST source, which is the derived table itself.
+        | A raw FROM can name several — `(…) as parcels, lateral … as d` —
+        | and the last one belongs to a lateral join that carries none of the
+        | model's columns. So the scan stops at the parenthesis that closes
+        | the first source rather than reading to the end of the string.
+        */
         $expression = (string) $from->getValue($q->getQuery()->getGrammar());
+        $alias = $this->firstSourceAlias($expression);
 
-        return preg_match('/\)\s*(?:as\s+)?"?([A-Za-z_][A-Za-z0-9_]*)"?\s*$/i', $expression, $found) === 1
-            ? $found[1] . '.is_replica'
-            : 'is_replica';
+        return $alias === null ? 'is_replica' : $alias . '.is_replica';
+    }
+
+    /**
+     * The alias the first source of a raw FROM declares, if any.
+     *
+     * @param string $expression The raw FROM, as written.
+     *
+     * @return string|null
+     */
+    protected function firstSourceAlias(string $expression): ?string
+    {
+        $depth = 0;
+
+        foreach (str_split($expression) as $position => $character) {
+            if ($character === '(') {
+                $depth++;
+
+                continue;
+            }
+
+            if ($character !== ')') {
+                continue;
+            }
+
+            $depth--;
+
+            if ($depth !== 0) {
+                continue;
+            }
+
+            // what follows the closing parenthesis: `as name`, or just `name`
+            return preg_match(
+                '/^\s*(?:as\s+)?"?([A-Za-z_][A-Za-z0-9_]*)"?/i',
+                substr($expression, $position + 1),
+                $found,
+            ) === 1 ? $found[1] : null;
+        }
+
+        return null;
     }
 
     /**
