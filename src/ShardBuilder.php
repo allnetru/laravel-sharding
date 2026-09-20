@@ -3,16 +3,19 @@
 namespace Allnetru\Sharding;
 
 use Allnetru\Sharding\Exceptions\UnsupportedCrossShardQuery;
+use Allnetru\Sharding\ShardingManager;
 use Allnetru\Sharding\Support\Colocation;
 use Allnetru\Sharding\Support\Coroutine\CoroutineDispatcher;
 use ArrayIterator;
 use Closure;
 use Generator;
+use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Query\Expression;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Pagination\Paginator;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\LazyCollection;
 use Illuminate\Support\Str;
 use Iterator;
@@ -1523,5 +1526,58 @@ class ShardBuilder extends EloquentBuilder
         }
 
         return 0;
+    }
+
+    /**
+     * Run a callback inside a transaction on the shard this query names.
+     *
+     * A transaction lives on one connection, so the query has to name one:
+     * its shard key with a single value, or `onShardConnection()` outright.
+     * Two values are two shards and a transaction cannot span them, so this
+     * refuses rather than guessing which to open.
+     *
+     * @param Closure $callback The work.
+     * @param int $attempts How many times to retry on a deadlock.
+     *
+     * @return mixed What the callback returned.
+     *
+     * @throws UnsupportedCrossShardQuery When the query is not pinned to one shard.
+     */
+    public function transaction(Closure $callback, int $attempts = 1): mixed
+    {
+        return $this->pinnedConnection('transaction')->transaction($callback, $attempts);
+    }
+
+    /**
+     * The one connection this query is pinned to.
+     *
+     * `onShardConnection()` names it outright. Otherwise the query's own
+     * `where`s have to pin it, through the same reading `get()` uses, and to
+     * exactly one primary.
+     *
+     * @param string $method The caller, for the message.
+     *
+     * @return ConnectionInterface
+     *
+     * @throws UnsupportedCrossShardQuery
+     */
+    protected function pinnedConnection(string $method): ConnectionInterface
+    {
+        if ($this->singleConnection) {
+            return $this->getQuery()->getConnection();
+        }
+
+        $pinned = $this->connectionsFromShardKey(
+            app(ShardingManager::class)->connectionsFor($this->getModel()),
+        );
+
+        if ($pinned === null || count($pinned) !== 1) {
+            throw new UnsupportedCrossShardQuery(sprintf(
+                '%s() runs on one shard, and this query does not name one: give the shard key a single value with where(), or pick the connection with onShardConnection().',
+                $method,
+            ));
+        }
+
+        return DB::connection((string) array_key_first($pinned));
     }
 }

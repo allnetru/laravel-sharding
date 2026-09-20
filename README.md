@@ -250,6 +250,24 @@ $partners = Organization::where('status', OrganizationStatus::partner)
 
 Insertions also resolve the target shard automatically. If you omit the primary key the configured ID generator assigns one before the record is saved.
 
+### Transactions
+
+A transaction lives on one connection, and `DB::transaction()` opens it on the
+default one — which on a sharded schema wraps nothing the callback touches:
+the writes inside go to the shard their key names and commit one by one
+regardless. Open it where the rows are instead:
+
+```php
+$parcel->transaction(fn () => ...);
+
+Parcel::query()->where('tenant_id', $tenantId)->transaction(fn () => ...);
+```
+
+Both need the shard named: the row carries its key, the builder pins one with
+`where(shardKey, …)` or with `onShardConnection()`. Two values of the key are
+two shards and a transaction cannot span them, so that is refused with
+`UnsupportedCrossShardQuery` rather than guessing which one to open.
+
 ### Running under Swoole
 
 When the PHP process is executed inside a Swoole coroutine context (for example,
