@@ -441,15 +441,20 @@ trait Shardable
     /**
      * Create a new Eloquent query builder for the model.
      *
-     * Typed as what it returns, so a shardable model's query is known to
-     * carry the builder's own methods — `onShardConnection()`, and a
-     * transaction on the shard the key names. Declared as the base builder,
-     * static analysis saw none of them and called every one undefined.
+     * Documented as what it returns, so a shardable model's query is known
+     * to carry the builder's own methods — `onShardConnection()`, and a
+     * transaction on the shard the key names. Declared only as the base
+     * builder, static analysis saw none of them and called every one
+     * undefined.
+     *
+     * The native type stays the base builder: this is a Laravel extension
+     * point, and narrowing it would stop a model overriding it with a
+     * ShardBuilder subclass of its own.
      *
      * @param \Illuminate\Database\Query\Builder $query
      * @return ShardBuilder
      */
-    public function newEloquentBuilder($query): ShardBuilder
+    public function newEloquentBuilder($query): Builder
     {
         return (new ShardBuilder($query))->setModel($this);
     }
