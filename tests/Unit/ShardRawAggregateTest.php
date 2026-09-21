@@ -133,6 +133,11 @@ class ShardRawAggregateTest extends TestCase
         // set-returning, so a wrapper around an aggregate is not one either
         $this->assertFalse($collapses->invoke($builder, 'st_dump(st_collect(geom)) as part'));
         $this->assertFalse($collapses->invoke($builder, 'st_dumppoints(st_union(geom)) as point'));
+
+        // min and max are aggregates over one argument and scalars over two
+        $this->assertTrue($collapses->invoke($builder, 'max(value) as highest'));
+        $this->assertFalse($collapses->invoke($builder, 'max(value, 10) as adjusted'));
+        $this->assertFalse($collapses->invoke($builder, 'min(value, other) as smaller'));
     }
 
     /**

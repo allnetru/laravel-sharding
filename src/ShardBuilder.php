@@ -921,8 +921,15 @@ class ShardBuilder extends EloquentBuilder
             return false;
         }
 
-        if (preg_match('/^\s*(count|sum|avg|min|max)\s*\(/i', $item) === 1) {
-            return true;
+        if (preg_match('/^\s*(count|sum|avg|min|max)\s*\(/i', $item, $named) === 1) {
+            /*
+            | min() and max() are aggregates over one argument and scalars
+            | over two: SQLite's `max(value, 10)` answers per row, and calling
+            | it collapsing would refuse an ordinary query and drop the
+            | ordering from a pinned one.
+            */
+            return !in_array(strtolower($named[1]), ['min', 'max'], true)
+                || count($this->argumentsOf($item)) === 1;
         }
 
         // the PostGIS aggregates, spelled out: every other st_* answers per row
@@ -934,6 +941,35 @@ class ShardBuilder extends EloquentBuilder
             // once: st_dump and its kin return a row per piece
             || (preg_match('/^\s*st_(dump|dumppoints|dumprings|dumpsegments|subdivide|segmentize|voronoipolygons|voronoilines|clusterdbscan|clusterkmeans)\s*\(/i', $item) !== 1
                 && preg_match('/^\s*st_\w+\s*\(\s*st_(collect|union|extent|memunion|polygonize|makeline)\s*\(/i', $item) === 1);
+    }
+
+    /**
+     * The arguments of the outermost call in an expression.
+     *
+     * @param string $item One item of the select list.
+     *
+     * @return list<string> Empty when the expression is not a call.
+     */
+    protected function argumentsOf(string $item): array
+    {
+        $open = strpos($item, '(');
+
+        if ($open === false) {
+            return [];
+        }
+
+        $depth = 0;
+        $length = strlen($item);
+
+        for ($position = $open; $position < $length; $position++) {
+            if ($item[$position] === '(') {
+                $depth++;
+            } elseif ($item[$position] === ')' && --$depth === 0) {
+                return $this->selectedItems(substr($item, $open + 1, $position - $open - 1));
+            }
+        }
+
+        return [];
     }
 
     /**
