@@ -283,7 +283,16 @@ trait Shardable
         $keyName = $this->getShardKey();
         $key = $this->getAttribute($keyName);
 
-        if (!$key) {
+        /*
+        | Null is a missing key; zero is not.
+        |
+        | `!$key` treated both the same, so a table keyed by a column where
+        | zero is a real value — a platform-wide row beside per-tenant ones —
+        | had an identifier invented for it on every insert. That does not
+        | fail: the row lands on a shard nothing will look for it on, and the
+        | next insert of the same logical row gets a different one again.
+        */
+        if ($key === null || $key === '') {
             $key = app(IdGenerator::class)->generate($this);
             $this->setAttribute($keyName, $key);
         }
@@ -550,7 +559,9 @@ trait Shardable
         $keyName = $this->getShardKey();
         $key = $this->getAttribute($keyName);
 
-        if (!$key) {
+        // null is a missing key and zero is not, the same distinction
+        // resolveShardPlacement() makes above
+        if ($key === null || $key === '') {
             $names = array_keys((array) $manager->connectionsFor($this));
 
             return $names[0] ?? parent::getConnectionName();
