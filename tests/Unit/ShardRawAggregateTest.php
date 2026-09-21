@@ -147,6 +147,11 @@ class ShardRawAggregateTest extends TestCase
         ));
         $this->assertFalse($collapses->invoke($builder, 'st_x(st_centroid(geom)) as lon'));
         $this->assertFalse($collapses->invoke($builder, 'st_dump(st_centroid(st_collect(geom))) as part'));
+
+        // st_union and st_collect are scalars over two geometries, the way
+        // min and max are over two numbers
+        $this->assertFalse($collapses->invoke($builder, 'st_astext(st_centroid(st_union(geom, other))) as t'));
+        $this->assertTrue($collapses->invoke($builder, 'st_astext(st_centroid(st_union(geom))) as t'));
     }
 
     /**

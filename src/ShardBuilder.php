@@ -872,6 +872,13 @@ class ShardBuilder extends EloquentBuilder
     ];
 
     /**
+     * The aggregates that are also scalars when given a second argument.
+     *
+     * @var list<string>
+     */
+    protected const SPATIAL_OVERLOADED = ['st_union', 'st_collect'];
+
+    /**
      * The PostGIS functions that answer once per piece, whatever they wrap.
      *
      * @var list<string>
@@ -960,9 +967,17 @@ class ShardBuilder extends EloquentBuilder
 
         $function = strtolower($spatial[1]);
 
-        // the PostGIS aggregates: every other st_* answers per row
+        /*
+        | The PostGIS aggregates: every other st_* answers per row.
+        |
+        | By the arguments as well as the name, because two of them are
+        | overloaded the way min() and max() are: `st_union(a, b)` unions two
+        | geometries of one row and answers per row, while `st_union(geom)`
+        | unions the column and answers once.
+        */
         if (in_array($function, self::SPATIAL_AGGREGATES, true)) {
-            return true;
+            return !in_array($function, self::SPATIAL_OVERLOADED, true)
+                || count($this->argumentsOf($item)) === 1;
         }
 
         // set-returning, so nothing inside it can make the result one row
