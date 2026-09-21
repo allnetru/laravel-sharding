@@ -795,11 +795,85 @@ class ShardBuilder extends EloquentBuilder
             return;
         }
 
-        if (empty($this->getQuery()->orders)) {
+        // an aggregate over the whole result has one row and nothing to
+        // order it by: Postgres refuses `order by id` on a query with no
+        // `group by`, and working around it with `toBase()` drops the
+        // routing and reads whichever shard happens to be first
+        if (empty($this->getQuery()->orders) && !$this->isBareAggregate()) {
             $builder->orderBy($this->getModel()->getKeyName());
         }
 
         $builder->limit($bound);
+    }
+
+    /**
+     * Whether the query aggregates the whole result into one row.
+     *
+     * Every selected item is an aggregate call and nothing groups them, so
+     * there is one row per shard and no column that could order it.
+     *
+     * @return bool
+     */
+    protected function isBareAggregate(): bool
+    {
+        $query = $this->getQuery();
+
+        if (!empty($query->groups) || empty($query->columns)) {
+            return false;
+        }
+
+        foreach ($query->columns as $column) {
+            $sql = $column instanceof Expression
+                ? (string) $column->getValue($query->getGrammar())
+                : (string) $column;
+
+            /*
+            | Every selected item, and selectRaw hands them over as one
+            | string: `count(*) as total, st_asewkt(st_collect(geom)) as hull`
+            | is a single column here. Splitting on the commas that sit
+            | outside parentheses is what tells them apart.
+            */
+            foreach ($this->selectedItems($sql) as $item) {
+                if (preg_match('/^\s*(count|sum|avg|min|max|st_\w+)\s*\(/i', $item) !== 1) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * The items of a select list, split on the commas between them.
+     *
+     * @param string $sql The select list, as written.
+     *
+     * @return list<string>
+     */
+    protected function selectedItems(string $sql): array
+    {
+        $items = [];
+        $depth = 0;
+        $current = '';
+
+        foreach (str_split($sql) as $character) {
+            if ($character === '(') {
+                $depth++;
+            } elseif ($character === ')') {
+                $depth--;
+            } elseif ($character === ',' && $depth === 0) {
+                $items[] = $current;
+                $current = '';
+
+                continue;
+            }
+
+            $current .= $character;
+        }
+
+        $items[] = $current;
+
+        return $items;
     }
 
     /**
