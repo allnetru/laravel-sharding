@@ -250,6 +250,47 @@ $partners = Organization::where('status', OrganizationStatus::partner)
 
 Insertions also resolve the target shard automatically. If you omit the primary key the configured ID generator assigns one before the record is saved.
 
+### Moving what a key owns
+
+A key decides which shard a row lives on, so changing it is not an update:
+the new key may name a different database, and `update()` refuses to change a
+shard key for that reason. When the move is genuinely what is wanted — a
+settlement bought by the company that runs it, an account merged into another
+— `ShardMover` does it:
+
+```php
+app(ShardMover::class)->move(
+    new Parcel(),
+    ['parcels', 'buildings', 'tasks'],
+    from: $oldTenantId,
+    to: $newTenantId,
+    filter: fn ($query) => $query->where('settlement_id', $settlement->getKey()),
+);
+
+// a group can key its tables differently, and name their rows differently:
+// give the column, or the model, per table
+app(ShardMover::class)->move(new User(), [
+    'user_roles' => UserRole::class,
+    'user_permissions' => UserPermission::class,
+], from: $userId, to: $keptUserId);
+```
+
+Within one shard it is an update. Across two it is a chunked copy followed by
+a delete, in that order: a row present twice for an instant is recoverable, a
+row absent from both is not. The filter narrows what moves, so a tenant can
+move one settlement rather than everything it owns.
+
+The owning table is left out of that second example on purpose: moving
+`users` from one identifier to another would rewrite the row's own primary key
+onto a row that already exists. What moves is what *belongs* to the key, and
+the row the key names is the application's to deal with.
+
+**It moves rows and nothing else.** Whether the move is allowed is the
+application's to decide, and so is what happens if it is interrupted: there is
+no transaction across connections, so a failure part-way leaves rows copied
+but not yet deleted. Run it where a retry is safe — a queued job whose work is
+idempotent — or take the settlement offline for the duration.
+
 ### Transactions
 
 A transaction lives on one connection, and `DB::transaction()` opens it on the
