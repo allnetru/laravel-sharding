@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.6.0 - 2026-09-21
+
+### Added
+
+- **`ShardMover`: rows can move from one shard key to another.** A key decides which database a row lives in, so changing it is not an update — and `ShardBuilder::update()` refuses to change one, correctly. But the move is sometimes exactly what is wanted: a settlement bought by the company that runs it, an account merged into another. Until now an application had to resolve both connections itself and copy rows across by hand, which is the knowledge about sharding this package exists to hold.
+
+```php
+app(ShardMover::class)->move(
+    new Parcel(),
+    ['parcels', 'buildings', 'tasks'],
+    from: $oldTenantId,
+    to: $newTenantId,
+    filter: fn ($query) => $query->where('settlement_id', $settlement->getKey()),
+);
+
+```
+What it handles, and what it does not:
+
+- **Placements, not connections.** A key names its shard and its replicas, and two keys often share one of them — with two shards and the shipped `replica_count` of 1, a key's replica *is* the other shard. What the two placements share is re-keyed in place, what only the destination names is copied to, and only what keeps nothing is deleted from. The copies carry `is_replica` for the placement they arrive in, so a replica is never presented as a second primary.
+- **Per-table keys.** A colocation group can key its tables differently — `users.id` beside `user_roles.user_id` — so a table may be given as `table => column`, or as `table => ModelClass` when its rows are not named `id` either.
+- **Order.** Every table is copied before anything is deleted, and the deletion walks them backwards, so a foreign key never sees a parent gone while its children are still there.
+- **What is deleted is what was copied**, by row key, rather than whatever the filter matches at the end: a row written while the copy ran is left where it is.
+- **No transaction across connections**, because there cannot be one. A failure part-way leaves rows copied but not yet deleted — nothing is lost, but a retry is the caller's to make safe. Run it where that is true.
+
 ## v0.5.7 - 2026-09-21
 
 ### Fixed
