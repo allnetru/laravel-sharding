@@ -138,6 +138,15 @@ class ShardRawAggregateTest extends TestCase
         $this->assertTrue($collapses->invoke($builder, 'max(value) as highest'));
         $this->assertFalse($collapses->invoke($builder, 'max(value, 10) as adjusted'));
         $this->assertFalse($collapses->invoke($builder, 'min(value, other) as smaller'));
+
+        // the aggregate at whatever depth the scalars around it put it: this
+        // is the centre of an upload, and one level of wrapping missed it
+        $this->assertTrue($collapses->invoke(
+            $builder,
+            "st_x(st_centroid(st_collect(coalesce(st_geomfromewkt(after->>'geom'), st_geomfromewkt(before->>'geom'))))) as lon",
+        ));
+        $this->assertFalse($collapses->invoke($builder, 'st_x(st_centroid(geom)) as lon'));
+        $this->assertFalse($collapses->invoke($builder, 'st_dump(st_centroid(st_collect(geom))) as part'));
     }
 
     /**
