@@ -245,6 +245,30 @@ The default `snowflake` generator produces sortable 64‑bit IDs. To use an auto
 sequence stored in the database, set `id_generator.default` to `sequence`.
 A table may override the generator via the `id_generator` option in its configuration.
 
+### When a shard key counts as absent
+
+The package fills a missing shard key in for you, from the configured ID
+generator. What counts as missing is exactly two values:
+
+| Value | Treated as |
+|---|---|
+| `null` | absent — a key is generated and written to the attribute |
+| `''` | absent — same |
+| `0` | **a key.** The row routes by zero like any other value |
+| `'0'` | a key, and routes identically to `0` |
+| `false` | a key, normalised to `0` before routing |
+
+Zero being a key is what lets a table hold a platform-wide row beside
+per-tenant ones: give it a reserved key of `0` and every write of it lands on
+the same shard and is found there. Before 0.6.1 a truthiness check swept zero
+up with null, so such a row had a fresh identifier invented on every insert —
+it landed on a shard nothing looked for it on, and the next write of the same
+logical row invented another one again.
+
+The empty string stays absent deliberately. It reaches the strategies as a key
+none of them refuses — `crc32('')` is 0 — so a row carrying one would pile onto
+the first shard rather than fail.
+
 ### Migrating data
 
 1. Add the new shard to `DB_SHARDS` and deploy.

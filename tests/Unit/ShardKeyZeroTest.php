@@ -114,6 +114,26 @@ class ShardKeyZeroTest extends TestCase
     }
 
     /**
+     * A boolean key routes the same before and after it is stored.
+     *
+     * PDO persists `false` as integer zero, so a row routed by `(string)
+     * false` — the empty string — would be read back routed by `'0'`: written
+     * to one shard and looked for on another, with nothing saying so.
+     *
+     * @return void
+     */
+    public function testABooleanKeyRoutesAsItWillBeStored(): void
+    {
+        $written = new ZeroKeyedNote(['tenant_id' => false, 'body' => 'boolean']);
+        $written->save();
+
+        $stored = new ZeroKeyedNote(['tenant_id' => 0, 'body' => 'stored as zero']);
+        $stored->save();
+
+        $this->assertSame($stored->getConnectionName(), $written->getConnectionName());
+    }
+
+    /**
      * A missing key is still filled in.
      *
      * The other half of the distinction: null means nobody said, and the

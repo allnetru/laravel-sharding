@@ -297,6 +297,8 @@ trait Shardable
             $this->setAttribute($keyName, $key);
         }
 
+        $key = self::normaliseShardKey($key);
+
         [$strategy, $config] = $manager->strategyFor($this);
         $connections = $strategy->determine($key, $config);
 
@@ -567,7 +569,7 @@ trait Shardable
             return $names[0] ?? parent::getConnectionName();
         }
 
-        $connections = $manager->connectionFor($this, $key);
+        $connections = $manager->connectionFor($this, self::normaliseShardKey($key));
         $this->connection = $connections[0];
         $this->replicaConnections = array_slice($connections, 1);
 
@@ -603,5 +605,25 @@ trait Shardable
     public function newEloquentBuilder($query): Builder
     {
         return (new ShardBuilder($query))->setModel($this);
+    }
+
+    /**
+     * The key as the strategies will see it once it has been stored.
+     *
+     * A boolean is the case this exists for. PDO persists `false` as integer
+     * zero, so a row written with `false` would be hashed as `(string) false`
+     * — the empty string — and read back hashed as `'0'`: written to one shard
+     * and looked for on another, with nothing anywhere saying so.
+     *
+     * Everything else passes through unchanged, zero included: it is a key
+     * like any other, which is the whole point of the checks above.
+     *
+     * @param mixed $key The raw attribute.
+     *
+     * @return mixed The value to route by.
+     */
+    protected static function normaliseShardKey(mixed $key): mixed
+    {
+        return is_bool($key) ? (int) $key : $key;
     }
 }
