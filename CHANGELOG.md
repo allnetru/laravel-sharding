@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.5.7 - 2026-09-21
+
+### Fixed
+
+- **An aggregate is recognised at whatever depth it sits.** `st_x(st_centroid(st_collect(geom)))` answers one row because `st_collect` does, but only a single level of wrapping was matched — so the query it was written for went back to being ordered by the primary key and Postgres refused it outright: «column id must appear in the GROUP BY clause». That was a 500 on the page showing an upload. The scan now walks the arguments to any depth, stopping at the set-returning functions, which nothing inside can collapse.
+- **`st_union` and `st_collect` are scalars over two geometries.** Overloaded the way `min` and `max` are over two numbers: `st_union(a, b)` unions two geometries of one row and answers per row, while `st_union(geom)` unions the column and answers once. The name alone had marked the whole expression collapsing.
+
 ## v0.5.6 - 2026-09-21
 
 ### Fixed
