@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.5.5 - 2026-09-21
+
+### Fixed
+
+- **The alias is the first source's, not the last.** A raw FROM can name more than one source — `(select … ) as parcels, lateral st_dumpsegments(…) as d` is an ordinary PostGIS shape — and the alias scan read to the end of the string, taking `d`. The lateral side carries none of the model's columns, so the replica filter asked for `d.is_replica`, which does not exist. The scan now stops at the parenthesis closing the first source, skips quoted text, and refuses clause keywords (`join`, `where`, `order`) as names.
+
+### Changed
+
+- **The builder is parameterised by its model.** `ShardBuilder` extended `EloquentBuilder` without its model parameter, so every `Model::query()` in an application inferred the base builder and a bare `Model` for whatever the chain returned — 755 analysis errors at level 5 in the application that uses this package, among them `Auth::login()` reported as given a `Model` instead of the `User` it was handed. `ShardBuilder` is now `@template TModel`, and `newEloquentBuilder()` returns `ShardBuilder<static>`. `query()` is left to Laravel: redeclaring it in the trait was the same defect from the other side.
+
 ## v0.5.4 - 2026-09-20
 
 ### Fixed
