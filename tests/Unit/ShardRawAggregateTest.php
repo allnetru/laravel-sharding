@@ -182,26 +182,26 @@ class ShardRawAggregateTest extends TestCase
         }
     }
 
-    public function testTheRebalanceSwitchDoesNotChangeWhatAQueryMayBe(): void
+    public function testARebalanceLeavesTheAggregateRefused(): void
     {
         [$mine] = $this->shardsOf(7);
 
         DB::connection($mine)->table('orders')->insert(['id' => 1, 'tenant_id' => 7, 'value' => 42]);
 
         /*
-        | `pin_by_key` is turned off while a rebalance moves rows, and it
-        | promises to change how many connections are asked and never what a
-        | query returns. Reading it here turned a pinned aggregate into a
-        | refusal for the duration of every rebalance.
+        | `pin_by_key` is turned off while a rebalance moves rows, and a keyed
+        | query then fans out — so every shard answers its own aggregate and
+        | there is no shard to attribute the total to. Refused, rather than
+        | answered from whichever came first.
         */
         config(['sharding.pin_by_key' => false]);
 
-        $row = RawAggregatedOrder::query()
+        $this->expectException(UnsupportedCrossShardQuery::class);
+
+        RawAggregatedOrder::query()
             ->where('tenant_id', 7)
             ->selectRaw('sum(value) as summed')
             ->first();
-
-        $this->assertSame(42, (int) $row->getAttribute('summed'));
     }
 
     /**

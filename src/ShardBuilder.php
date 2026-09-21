@@ -42,16 +42,6 @@ class ShardBuilder extends EloquentBuilder
     protected bool $singleConnection = false;
 
     /**
-     * Whether to read the query's key even while pinning is switched off.
-     *
-     * The switch decides how many connections a read asks; it must not decide
-     * what a query is allowed to be, which is a question about the query.
-     *
-     * @var bool
-     */
-    protected bool $ignorePinningSwitch = false;
-
-    /**
      * How many values of an `IN` are still worth resolving one by one.
      *
      * Above this the resolution costs more than the fan-out it saves, and a
@@ -110,7 +100,7 @@ class ShardBuilder extends EloquentBuilder
         | while its slot already names another. A fan-out finds it either way;
         | a pinned read asks the connection the slot names and misses it.
         */
-        if (!$this->ignorePinningSwitch && !(bool) config('sharding.pin_by_key', true)) {
+        if (!(bool) config('sharding.pin_by_key', true)) {
             return null;
         }
 
@@ -865,35 +855,13 @@ class ShardBuilder extends EloquentBuilder
         }
 
         /*
-        | Whether the query names one key, not whether pinning is switched on.
-        | `pin_by_key` is turned off for the window a rebalance is moving rows
-        | in, and it promises to change how many connections are asked and
-        | never what a query returns — so asking it here would turn a query
-        | that works into a refusal for the duration.
+        | What the query will actually run on, not what its key could name.
+        | With `pin_by_key` off for a rebalance, a keyed query still fans out
+        | — so a raw aggregate is answered by every shard and the bound keeps
+        | whichever row came first. It stays refused for that window, which
+        | is the honest answer: there is no shard to attribute it to.
         */
-        $all = app(ShardingManager::class)->connectionsFor($this->getModel());
-        $pinned = $this->pinnedIgnoringTheSwitch($all);
-
-        return $pinned !== null && count($pinned) === 1;
-    }
-
-    /**
-     * The connections the query's own key names, whatever `pin_by_key` says.
-     *
-     * @param array<string, array{weight:int}> $all Every connection of the model.
-     *
-     * @return array<string, array{weight:int}>|null Null when the query names no key.
-     */
-    protected function pinnedIgnoringTheSwitch(array $all): ?array
-    {
-        $ignoring = $this->ignorePinningSwitch;
-        $this->ignorePinningSwitch = true;
-
-        try {
-            return $this->connectionsFromShardKey($all);
-        } finally {
-            $this->ignorePinningSwitch = $ignoring;
-        }
+        return count($this->connections()) === 1;
     }
 
     /**
