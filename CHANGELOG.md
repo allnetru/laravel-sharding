@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.6.1 - 2026-09-21
+
+### Fixed
+
+- **`paginate()` and `cursor()` answered an unpinned raw aggregate.** Both are bounded reads like `get()`, and both already refused an unmergeable order — but the refusal for a raw aggregate had been added to `get()` alone. So `selectRaw('sum(value) as summed')->paginate()` came back with one shard's own sum presented as the page, while every other read path on the same query threw. All three refuse now.
+- **The refusal read `pin_by_key`, which is not its question.** `readsOneShard()` now asks what the query will actually run on rather than what its key could name — so a pinned aggregate is answered when pinning is on, and refused while a rebalance has it off, which is the honest answer for a query every shard is about to see.
+- **`ShardMover`'s replica-column cache ignored the connection.** Two shards can disagree about a column while a migration is half-run, and one shard's answer then decided for the other — writing the flag where there was no column, or skipping it where there was.
+
 ## v0.6.0 - 2026-09-21
 
 ### Added
@@ -19,6 +27,7 @@ app(ShardMover::class)->move(
     to: $newTenantId,
     filter: fn ($query) => $query->where('settlement_id', $settlement->getKey()),
 );
+
 
 ```
 What it handles, and what it does not:
