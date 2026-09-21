@@ -441,6 +441,7 @@ class ShardBuilder extends EloquentBuilder
         }
 
         $this->refuseUnmergeableOrder('get');
+        $this->refuseUnpinnedRawAggregate('get');
 
         $limit = $this->getQuery()->limit;
         $offset = $this->getQuery()->offset;
@@ -813,6 +814,36 @@ class ShardBuilder extends EloquentBuilder
     }
 
     /**
+     * Refuse a raw aggregate that no shard key pins.
+     *
+     * Every shard answers its own `sum(…)`, and there is no honest way to add
+     * them up here: the rows carry whatever the select list named and nothing
+     * says how to combine them. Ordering does not save it either — on SQLite
+     * `order by id` over a query with no `group by` is accepted, and one
+     * shard's row is then returned as the answer for all of them. The named
+     * aggregates — count(), sum(), avg() — have their own paths and do
+     * combine; this is for `selectRaw('sum(value) as total')`.
+     *
+     * @param string $method The method being called, for the message.
+     *
+     * @return void
+     *
+     * @throws UnsupportedCrossShardQuery
+     */
+    protected function refuseUnpinnedRawAggregate(string $method): void
+    {
+        if (!$this->isBareAggregate() || $this->readsOneShard()) {
+            return;
+        }
+
+        throw new UnsupportedCrossShardQuery(sprintf(
+            '%s::%s() cannot combine a raw aggregate across shards: each shard answers its own, and nothing here says how to add them up. Give the shard key a single value with where(), pick the connection with onShardConnection(), or use count()/sum()/avg(), which combine.',
+            $this->getModel()::class,
+            $method,
+        ));
+    }
+
+    /**
      * Whether this query resolves to a single shard.
      *
      * @return bool
@@ -899,7 +930,10 @@ class ShardBuilder extends EloquentBuilder
             '/^\s*st_(collect|union|extent|memunion|memcollect|polygonize|makeline|clusterintersecting|clusterwithin|coverageunion)\s*\(/i',
             $item,
         ) === 1
-            || preg_match('/^\s*st_\w+\s*\(\s*st_(collect|union|extent|memunion|polygonize|makeline)\s*\(/i', $item) === 1;
+            // a wrapper around one, as long as the wrapper itself answers
+            // once: st_dump and its kin return a row per piece
+            || (preg_match('/^\s*st_(dump|dumppoints|dumprings|dumpsegments|subdivide|segmentize|voronoipolygons|voronoilines|clusterdbscan|clusterkmeans)\s*\(/i', $item) !== 1
+                && preg_match('/^\s*st_\w+\s*\(\s*st_(collect|union|extent|memunion|polygonize|makeline)\s*\(/i', $item) === 1);
     }
 
     /**
