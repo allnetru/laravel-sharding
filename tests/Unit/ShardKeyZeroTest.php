@@ -78,6 +78,42 @@ class ShardKeyZeroTest extends TestCase
     }
 
     /**
+     * An empty string is a missing key, not a value.
+     *
+     * The one case this differs from «null only» on, and the reason it does:
+     * `''` reaches the strategies as a key nothing refuses — `crc32('')` is 0,
+     * so every row carrying one would pile onto the first shard rather than
+     * fail. `transaction()` has drawn the line here since it was written.
+     *
+     * @return void
+     */
+    public function testAnEmptyStringIsTreatedAsMissing(): void
+    {
+        $note = new ZeroKeyedNote(['tenant_id' => '', 'body' => 'empty']);
+        $note->save();
+
+        $this->assertNotSame('', $note->tenant_id);
+        $this->assertNotNull($note->tenant_id);
+    }
+
+    /**
+     * Zero written as a string is still zero, not an absent key.
+     *
+     * The regression this guards against is the obvious over-correction: a
+     * check that swept up «falsy strings» would take `'0'` with it, and a key
+     * arriving from a form or a driver as text is the ordinary case.
+     *
+     * @return void
+     */
+    public function testZeroAsAStringIsKept(): void
+    {
+        $note = new ZeroKeyedNote(['tenant_id' => '0', 'body' => 'zero as text']);
+        $note->save();
+
+        $this->assertSame(0, (int) $note->tenant_id);
+    }
+
+    /**
      * A missing key is still filled in.
      *
      * The other half of the distinction: null means nobody said, and the
