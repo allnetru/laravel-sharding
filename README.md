@@ -250,6 +250,32 @@ $partners = Organization::where('status', OrganizationStatus::partner)
 
 Insertions also resolve the target shard automatically. If you omit the primary key the configured ID generator assigns one before the record is saved.
 
+### Moving what a key owns
+
+A key decides which shard a row lives on, so changing it is not an update:
+the new key may name a different database, and `update()` refuses to change a
+shard key for that reason. When the move is genuinely what is wanted — a
+settlement bought by the company that runs it, an account merged into another
+— `ShardMover` does it:
+
+```php
+app(ShardMover::class)->move(
+    new Parcel(),
+    ['parcels', 'buildings', 'tasks'],
+    from: $oldTenantId,
+    to: $newTenantId,
+    filter: fn ($query) => $query->where('settlement_id', $settlement->getKey()),
+);
+```
+
+Within one shard it is an update. Across two it is a chunked copy followed by
+a delete, in that order: a row present twice for an instant is recoverable, a
+row absent from both is not. The filter narrows what moves, so a tenant can
+move one settlement rather than everything it owns.
+
+It moves rows and nothing else — whether the move is allowed is the
+application's to decide.
+
 ### Transactions
 
 A transaction lives on one connection, and `DB::transaction()` opens it on the
