@@ -6,6 +6,7 @@ use Allnetru\Sharding\Exceptions\UnsupportedCrossShardQuery;
 use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Moving everything one shard key owns to another key.
@@ -41,24 +42,33 @@ class ShardMover
     /**
      * Move the rows a key owns to another key.
      *
-     * Every table named is moved, and the rows are chosen by the shard key
-     * plus whatever else the filter narrows them to: a tenant moving one of
-     * its settlements moves the rows of that settlement, not all of them.
+     * The tables are given as `table => shard key column`, because one
+     * colocation group can key its tables differently: `user_data` owns
+     * `users` by `id` and `user_roles` by `user_id`, and applying one
+     * model's key to every table of the group would filter the children by
+     * a column they do not have — or, worse, by one that means something
+     * else. A plain list of tables is accepted too and takes the model's
+     * own key, which is the ordinary case.
      *
-     * Within one shard this is an update, because the row is already where
-     * it belongs. Across two it is an insert followed by a delete, in that
-     * order: a row present twice for an instant is recoverable, a row absent
-     * from both is not.
+     * Within one shard this is an update. Across two it is a copy of every
+     * table, then a delete of every table — in that order rather than table
+     * by table, so a foreign key between two of them never sees a parent
+     * gone while its children are still there.
+     *
+     * Replicas move with the primary. A row written through `Shardable`
+     * exists on every connection the key names, so a move that touched only
+     * the first would leave copies behind under the old key — which is what
+     * a later read of the replica would answer with.
      *
      * @param Model|string $model The model, or the table, whose group is being moved.
-     * @param list<string> $tables Which tables to move, in the order they should move.
+     * @param list<string>|array<string, string> $tables The tables, or table => shard key column.
      * @param mixed $from The key the rows have now.
      * @param mixed $to The key they are moving to.
      * @param (callable(\Illuminate\Database\Query\Builder): \Illuminate\Database\Query\Builder)|null $filter Narrows what moves.
      *
      * @return int How many rows moved.
      *
-     * @throws UnsupportedCrossShardQuery When either key names more than one connection.
+     * @throws UnsupportedCrossShardQuery When either key names no connection.
      */
     public function move(
         Model|string $model,
@@ -71,95 +81,144 @@ class ShardMover
             return 0;
         }
 
-        $shardKey = $this->shardKeyOf($model);
-        $sameShard = $this->connectionNameOf($model, $from) === $this->connectionNameOf($model, $to);
-        $source = $this->shards->connection($model, $from);
-        $target = $this->shards->connection($model, $to);
+        $keyed = $this->keyedTables($model, $tables);
+        $sources = $this->connectionsOf($model, $from);
+        $targets = $this->connectionsOf($model, $to);
 
-        $moved = 0;
+        /*
+        | The two keys often share a connection: with two shards and one
+        | replica each, a key's replica is the other shard, which is where
+        | the move is going. A row already sitting there is re-keyed where it
+        | is; only the connections that do not have it are written to, and
+        | only the ones that keep nothing are deleted from.
+        */
+        $shared = array_values(array_intersect($sources, $targets));
 
-        foreach ($tables as $table) {
-            $moved += $sameShard
-                ? $this->moveWithin($source, $table, $shardKey, $from, $to, $filter)
-                : $this->moveAcross($source, $target, $table, $shardKey, $from, $to, $filter);
-        }
-
-        return $moved;
+        return $this->rekey($shared, $keyed, $from, $to, $filter)
+            + $this->relocate(
+                $sources,
+                array_values(array_diff($targets, $sources)),
+                array_values(array_diff($sources, $targets)),
+                $keyed,
+                $from,
+                $to,
+                $filter,
+                counted: $shared === [],
+            );
     }
 
     /**
-     * Move rows that are already on the right connection.
+     * Give every row a new key, where it already is.
      *
-     * @param ConnectionInterface $connection The shard both keys name.
-     * @param string $table The table.
-     * @param string $shardKey The column the key lives in.
+     * @param list<string> $connections Every connection the key names, replicas included.
+     * @param array<string, string> $tables The tables, by their shard key column.
      * @param mixed $from The key the rows have now.
      * @param mixed $to The key they are moving to.
      * @param callable|null $filter Narrows what moves.
      *
      * @return int
      */
-    protected function moveWithin(
-        ConnectionInterface $connection,
-        string $table,
-        string $shardKey,
-        mixed $from,
-        mixed $to,
-        ?callable $filter,
-    ): int {
-        return $this->rowsOf($connection, $table, $shardKey, $from, $filter)
-            ->update([$shardKey => $to]);
-    }
-
-    /**
-     * Copy rows to the other connection, then take them off this one.
-     *
-     * In chunks, because a settlement's parcels and a tenant's media are
-     * thousands of rows and a single insert of all of them is a statement
-     * nothing can recover from half-way. Ordered by `id`, which every
-     * sharded table has by the shape this package requires of them.
-     *
-     * @param ConnectionInterface $source Where the rows are.
-     * @param ConnectionInterface $target Where they are going.
-     * @param string $table The table.
-     * @param string $shardKey The column the key lives in.
-     * @param mixed $from The key the rows have now.
-     * @param mixed $to The key they are moving to.
-     * @param callable|null $filter Narrows what moves.
-     *
-     * @return int
-     */
-    protected function moveAcross(
-        ConnectionInterface $source,
-        ConnectionInterface $target,
-        string $table,
-        string $shardKey,
+    protected function rekey(
+        array $connections,
+        array $tables,
         mixed $from,
         mixed $to,
         ?callable $filter,
     ): int {
         $moved = 0;
 
-        $this->rowsOf($source, $table, $shardKey, $from, $filter)
-            ->orderBy('id')
-            ->chunk(self::CHUNK, function (Collection $rows) use ($target, $table, $shardKey, $to, &$moved): void {
-                $target->table($table)->insert(
-                    $rows->map(static function (object $row) use ($shardKey, $to): array {
-                        $values = (array) $row;
-                        $values[$shardKey] = $to;
+        foreach ($tables as $table => $shardKey) {
+            foreach ($connections as $index => $connection) {
+                $updated = $this->rowsOf(DB::connection($connection), $table, $shardKey, $from, $filter)
+                    ->update([$shardKey => $to]);
 
-                        return $values;
-                    })->all(),
-                );
-
-                $moved += $rows->count();
-            });
-
-        if ($moved > 0) {
-            $this->rowsOf($source, $table, $shardKey, $from, $filter)->delete();
+                // counted once, on the primary: the replicas hold the same
+                // rows and counting them again would report a multiple
+                if ($index === 0) {
+                    $moved += $updated;
+                }
+            }
         }
 
         return $moved;
+    }
+
+    /**
+     * Copy every table to the connections that do not have it, then take the
+     * originals off the ones that keep nothing.
+     *
+     * Every table is copied before anything is deleted, so a foreign key
+     * between two of them never sees a parent gone while its children are
+     * still there — whatever order the tables are given in.
+     *
+     * What is deleted is what was copied, by primary key, rather than
+     * whatever the filter matches at the end: a row written while the copy
+     * was running has not been copied, and deleting it would lose it.
+     *
+     * @param list<string> $sources Where the rows are, primary first.
+     * @param list<string> $arriving The connections that do not hold them yet.
+     * @param list<string> $leaving The connections that keep nothing.
+     * @param array<string, string> $tables The tables, by their shard key column.
+     * @param mixed $from The key the rows have now.
+     * @param mixed $to The key they are moving to.
+     * @param callable|null $filter Narrows what moves.
+     * @param bool $counted Whether these rows are this move's own count.
+     *
+     * @return int
+     */
+    protected function relocate(
+        array $sources,
+        array $arriving,
+        array $leaving,
+        array $tables,
+        mixed $from,
+        mixed $to,
+        ?callable $filter,
+        bool $counted,
+    ): int {
+        if ($arriving === [] && $leaving === []) {
+            return 0;
+        }
+
+        $primary = DB::connection($sources[0]);
+        $copied = [];
+        $moved = 0;
+
+        foreach ($tables as $table => $shardKey) {
+            $ids = [];
+
+            $this->rowsOf($primary, $table, $shardKey, $from, $filter)
+                ->orderBy('id')
+                ->chunk(self::CHUNK, function (Collection $rows) use ($arriving, $table, $shardKey, $to, &$ids): void {
+                    $values = $rows->map(static function (object $row) use ($shardKey, $to): array {
+                        $columns = (array) $row;
+                        $columns[$shardKey] = $to;
+
+                        return $columns;
+                    })->all();
+
+                    foreach ($arriving as $target) {
+                        DB::connection($target)->table($table)->insert($values);
+                    }
+
+                    foreach ($rows as $row) {
+                        $ids[] = $row->id;
+                    }
+                });
+
+            $copied[$table] = $ids;
+            $moved += count($ids);
+        }
+
+        foreach ($copied as $table => $ids) {
+            foreach (array_chunk($ids, self::CHUNK) as $chunk) {
+                foreach ($leaving as $source) {
+                    DB::connection($source)->table($table)->whereIn('id', $chunk)->delete();
+                }
+            }
+        }
+
+        return $counted ? $moved : 0;
     }
 
     /**
@@ -186,22 +245,47 @@ class ShardMover
     }
 
     /**
-     * The name of the connection a key is written to.
+     * The tables to move, each with the column its shard key lives in.
      *
-     * The first of them: a key names its primary and then its replicas, and
-     * a move reads and writes the primary — the replicas are the package's
-     * own business and follow on their own.
+     * @param Model|string $model The model whose key the plain entries take.
+     * @param list<string>|array<string, string> $tables As given.
+     *
+     * @return array<string, string>
+     */
+    protected function keyedTables(Model|string $model, array $tables): array
+    {
+        $ownKey = $this->shardKeyOf($model);
+        $keyed = [];
+
+        foreach ($tables as $table => $shardKey) {
+            if (is_int($table)) {
+                $keyed[$shardKey] = $ownKey;
+
+                continue;
+            }
+
+            $keyed[$table] = $shardKey;
+        }
+
+        return $keyed;
+    }
+
+    /**
+     * Every connection a key names, its primary first.
      *
      * @param Model|string $model The model or table.
      * @param mixed $key The key.
      *
-     * @return string
+     * @return list<string>
      *
-     * @throws UnsupportedCrossShardQuery When the key names no connection at all.
+     * @throws UnsupportedCrossShardQuery When the key names none.
      */
-    protected function connectionNameOf(Model|string $model, mixed $key): string
+    protected function connectionsOf(Model|string $model, mixed $key): array
     {
-        $connections = $this->shards->connectionFor($model, $key);
+        $connections = array_values(array_map(
+            static fn ($name): string => (string) $name,
+            $this->shards->connectionFor($model, $key),
+        ));
 
         if ($connections === []) {
             throw new UnsupportedCrossShardQuery(sprintf(
@@ -210,7 +294,7 @@ class ShardMover
             ));
         }
 
-        return (string) $connections[0];
+        return $connections;
     }
 
     /**
