@@ -861,6 +861,35 @@ class ShardBuilder extends EloquentBuilder
     }
 
     /**
+     * The PostGIS functions that answer once over every row given to them.
+     *
+     * @var list<string>
+     */
+    protected const SPATIAL_AGGREGATES = [
+        'st_collect', 'st_union', 'st_extent', 'st_memunion', 'st_memcollect',
+        'st_polygonize', 'st_makeline', 'st_clusterintersecting',
+        'st_clusterwithin', 'st_coverageunion',
+    ];
+
+    /**
+     * The aggregates that are also scalars when given a second argument.
+     *
+     * @var list<string>
+     */
+    protected const SPATIAL_OVERLOADED = ['st_union', 'st_collect'];
+
+    /**
+     * The PostGIS functions that answer once per piece, whatever they wrap.
+     *
+     * @var list<string>
+     */
+    protected const SPATIAL_SET_RETURNING = [
+        'st_dump', 'st_dumppoints', 'st_dumprings', 'st_dumpsegments',
+        'st_subdivide', 'st_segmentize', 'st_voronoipolygons',
+        'st_voronoilines', 'st_clusterdbscan', 'st_clusterkmeans',
+    ];
+
+    /**
      * Whether the query aggregates the whole result into one row.
      *
      * Every selected item is an aggregate call and nothing groups them, so
@@ -932,15 +961,45 @@ class ShardBuilder extends EloquentBuilder
                 || count($this->argumentsOf($item)) === 1;
         }
 
-        // the PostGIS aggregates, spelled out: every other st_* answers per row
-        return preg_match(
-            '/^\s*st_(collect|union|extent|memunion|memcollect|polygonize|makeline|clusterintersecting|clusterwithin|coverageunion)\s*\(/i',
-            $item,
-        ) === 1
-            // a wrapper around one, as long as the wrapper itself answers
-            // once: st_dump and its kin return a row per piece
-            || (preg_match('/^\s*st_(dump|dumppoints|dumprings|dumpsegments|subdivide|segmentize|voronoipolygons|voronoilines|clusterdbscan|clusterkmeans)\s*\(/i', $item) !== 1
-                && preg_match('/^\s*st_\w+\s*\(\s*st_(collect|union|extent|memunion|polygonize|makeline)\s*\(/i', $item) === 1);
+        if (preg_match('/^\s*(st_\w+)\s*\(/i', $item, $spatial) !== 1) {
+            return false;
+        }
+
+        $function = strtolower($spatial[1]);
+
+        /*
+        | The PostGIS aggregates: every other st_* answers per row.
+        |
+        | By the arguments as well as the name, because two of them are
+        | overloaded the way min() and max() are: `st_union(a, b)` unions two
+        | geometries of one row and answers per row, while `st_union(geom)`
+        | unions the column and answers once.
+        */
+        if (in_array($function, self::SPATIAL_AGGREGATES, true)) {
+            return !in_array($function, self::SPATIAL_OVERLOADED, true)
+                || count($this->argumentsOf($item)) === 1;
+        }
+
+        // set-returning, so nothing inside it can make the result one row
+        if (in_array($function, self::SPATIAL_SET_RETURNING, true)) {
+            return false;
+        }
+
+        /*
+        | A scalar wrapper around an aggregate, at whatever depth it sits:
+        | `st_x(st_centroid(st_collect(geom)))` is one row because st_collect
+        | is, and the two scalars around it each answer once. Matching only
+        | one level of wrapping missed exactly that, and the query it was
+        | written for — the centre of an upload — went back to being ordered
+        | by a column it does not select.
+        */
+        foreach ($this->argumentsOf($item) as $argument) {
+            if ($this->collapsesToOneRow($argument)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
