@@ -24,7 +24,15 @@ use Throwable;
 /**
  * Eloquent builder that queries across multiple shard connections.
  *
- * @method ShardBuilder withoutReplicas()
+ * Parameterised by the model, so a query keeps its type: unparameterised, a
+ * `Model::query()` was inferred as the base builder and the methods this one
+ * adds read as undefined.
+ *
+ * @template TModel of \Illuminate\Database\Eloquent\Model
+ *
+ * @extends EloquentBuilder<TModel>
+ *
+ * @method ShardBuilder<TModel> withoutReplicas()
  */
 class ShardBuilder extends EloquentBuilder
 {

@@ -24,13 +24,15 @@ use Illuminate\Support\Str;
 use InvalidArgumentException;
 
 /**
- * The model parameter is kept in every one of these: an unparameterised
- * ShardBuilder would discard `Builder<static>` and infer a bare Model for
- * everything chained after it.
+ * The builder a shardable model answers with is the package's own, so the
+ * methods it adds — `onShardConnection()`, and a transaction on the shard the
+ * key names — are known to whatever reads the model's query.
  *
- * @method static Builder<static>&ShardBuilder withoutReplicas()
- * @method static Builder<static>&ShardBuilder query()
- * @method static Builder<static>&ShardBuilder onShardConnection(string $connection)
+ * `query()` is deliberately absent: Laravel declares it, and redeclaring it
+ * here replaces a model-aware builder everywhere at once.
+ *
+ * @method static ShardBuilder<static> withoutReplicas()
+ * @method static ShardBuilder<static> onShardConnection(string $connection)
  */
 trait Shardable
 {
@@ -585,7 +587,7 @@ trait Shardable
      * ShardBuilder subclass of its own.
      *
      * @param \Illuminate\Database\Query\Builder $query
-     * @return ShardBuilder
+     * @return ShardBuilder<$this>
      */
     public function newEloquentBuilder($query): Builder
     {
