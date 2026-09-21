@@ -266,6 +266,13 @@ app(ShardMover::class)->move(
     to: $newTenantId,
     filter: fn ($query) => $query->where('settlement_id', $settlement->getKey()),
 );
+
+// a group can key its tables differently, and name their rows differently:
+// give the column, or the model, per table
+app(ShardMover::class)->move(new User(), [
+    'users' => 'id',
+    'user_roles' => UserRole::class,
+], from: $userId, to: $mergedInto);
 ```
 
 Within one shard it is an update. Across two it is a chunked copy followed by

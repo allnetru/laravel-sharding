@@ -210,6 +210,120 @@ class ShardMoverTest extends TestCase
         );
     }
 
+    public function testOverlappingPlacementsStillCopyToTheNewConnection(): void
+    {
+        /*
+        | Three shards and one replica, so a key's placement is a pair and two
+        | keys can share one connection without sharing both: `[B, C]` moving
+        | to `[A, B]`. Re-keying B before reading it left the copy pass
+        | finding nothing, so A got no rows and C kept them.
+        */
+        $this->files['shard_3'] = tempnam(sys_get_temp_dir(), 'shard-');
+        config([
+            'database.connections.shard_3' => [
+                'driver' => 'sqlite',
+                'database' => $this->files['shard_3'],
+                'prefix' => '',
+            ],
+            'sharding.replica_count' => 1,
+            'sharding.connections' => [
+                'shard_1' => ['weight' => 1],
+                'shard_2' => ['weight' => 1],
+                'shard_3' => ['weight' => 1],
+            ],
+        ]);
+
+        Schema::connection('shard_3')->create('notes', function (Blueprint $table): void {
+            $table->unsignedBigInteger('id')->primary();
+            $table->unsignedBigInteger('tenant_id');
+            $table->unsignedBigInteger('folder_id');
+            $table->string('body');
+            $table->boolean('is_replica')->default(false);
+        });
+
+        app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
+
+        [$from, $to] = $this->twoKeysSharingOneConnection();
+
+        foreach (app(ShardingManager::class)->connectionFor(new MovableNote(), $from) as $connection) {
+            DB::connection($connection)->table('notes')->insert([
+                ['id' => 1, 'tenant_id' => $from, 'folder_id' => 5, 'body' => 'moves'],
+            ]);
+        }
+
+        app(ShardMover::class)->move(new MovableNote(), ['notes'], $from, $to);
+
+        foreach (app(ShardingManager::class)->connectionFor(new MovableNote(), $to) as $connection) {
+            $this->assertSame(
+                1,
+                DB::connection($connection)->table('notes')->where('tenant_id', $to)->count(),
+                sprintf('%s did not get its copy', $connection),
+            );
+        }
+
+        foreach (['shard_1', 'shard_2', 'shard_3'] as $connection) {
+            $this->assertSame(
+                0,
+                DB::connection($connection)->table('notes')->where('tenant_id', $from)->count(),
+                sprintf('a copy stayed behind on %s', $connection),
+            );
+        }
+    }
+
+    public function testACopyKnowsWhetherItIsAReplica(): void
+    {
+        config(['sharding.replica_count' => 1]);
+        app()->singleton(ShardingManager::class, fn () => new ShardingManager(config('sharding')));
+
+        $from = 7;
+        $to = 8;
+
+        foreach (app(ShardingManager::class)->connectionFor(new MovableNote(), $from) as $index => $connection) {
+            DB::connection($connection)->table('notes')->insert([[
+                'id' => 1,
+                'tenant_id' => $from,
+                'folder_id' => 5,
+                'body' => 'moves',
+                'is_replica' => $index > 0,
+            ]]);
+        }
+
+        app(ShardMover::class)->move(new MovableNote(), ['notes'], $from, $to);
+
+        // the flag follows the new placement: the primary's copy is primary,
+        // the replica's is a replica, whichever they were before
+        foreach (app(ShardingManager::class)->connectionFor(new MovableNote(), $to) as $index => $connection) {
+            $this->assertSame(
+                $index > 0,
+                (bool) DB::connection($connection)->table('notes')->where('tenant_id', $to)->value('is_replica'),
+                sprintf('%s carries the wrong replica flag', $connection),
+            );
+        }
+    }
+
+    /**
+     * Two keys whose placements share exactly one connection.
+     *
+     * @return array{0: int, 1: int}
+     */
+    protected function twoKeysSharingOneConnection(): array
+    {
+        $shards = static fn (int $key): array => app(ShardingManager::class)
+            ->connectionFor(new MovableNote(), $key);
+
+        for ($key = 1; $key < 200; $key++) {
+            for ($other = $key + 1; $other < 200; $other++) {
+                $shared = array_intersect($shards($key), $shards($other));
+
+                if (count($shared) === 1) {
+                    return [$key, $other];
+                }
+            }
+        }
+
+        $this->fail('no two keys share exactly one connection');
+    }
+
     protected function tearDown(): void
     {
         foreach ($this->files as $file) {

@@ -32,6 +32,13 @@ class ShardMover
     protected const CHUNK = 500;
 
     /**
+     * What each table calls its own primary key.
+     *
+     * @var array<string, string>
+     */
+    protected array $rowKeys = [];
+
+    /**
      * @param ShardingManager $shards Resolves which connection a key names.
      */
     public function __construct(
@@ -61,7 +68,7 @@ class ShardMover
      * a later read of the replica would answer with.
      *
      * @param Model|string $model The model, or the table, whose group is being moved.
-     * @param list<string>|array<string, string> $tables The tables, or table => shard key column.
+     * @param list<string>|array<string, string> $tables The tables; or table => shard key column, or table => model class when the table names its rows something other than `id`.
      * @param mixed $from The key the rows have now.
      * @param mixed $to The key they are moving to.
      * @param (callable(\Illuminate\Database\Query\Builder): \Illuminate\Database\Query\Builder)|null $filter Narrows what moves.
@@ -86,25 +93,34 @@ class ShardMover
         $targets = $this->connectionsOf($model, $to);
 
         /*
-        | The two keys often share a connection: with two shards and one
-        | replica each, a key's replica is the other shard, which is where
-        | the move is going. A row already sitting there is re-keyed where it
-        | is; only the connections that do not have it are written to, and
-        | only the ones that keep nothing are deleted from.
+        | The two placements often overlap: with two shards and one replica
+        | each, a key's replica is the other shard, which is where the move is
+        | going. So the rows are copied to the connections that do not hold
+        | them, deleted from the ones that keep nothing, and re-keyed on the
+        | ones both placements name.
+        |
+        | Copying first and re-keying last, because the re-key is what makes
+        | the source rows unfindable: doing it first left `relocate()` reading
+        | a primary whose rows already carried the new key, finding none, and
+        | copying nothing — a destination half filled and a source half
+        | emptied.
         */
         $shared = array_values(array_intersect($sources, $targets));
 
-        return $this->rekey($shared, $keyed, $from, $to, $filter)
-            + $this->relocate(
-                $sources,
-                array_values(array_diff($targets, $sources)),
-                array_values(array_diff($sources, $targets)),
-                $keyed,
-                $from,
-                $to,
-                $filter,
-                counted: $shared === [],
-            );
+        $moved = $this->relocate(
+            $sources,
+            array_values(array_diff($targets, $sources)),
+            array_values(array_diff($sources, $targets)),
+            $keyed,
+            $from,
+            $to,
+            $targets,
+            $filter,
+        );
+
+        $rekeyed = $this->rekey($shared, $keyed, $from, $to, $targets, $filter);
+
+        return $moved > 0 ? $moved : $rekeyed;
     }
 
     /**
@@ -123,6 +139,7 @@ class ShardMover
         array $tables,
         mixed $from,
         mixed $to,
+        array $targets,
         ?callable $filter,
     ): int {
         $moved = 0;
@@ -130,7 +147,14 @@ class ShardMover
         foreach ($tables as $table => $shardKey) {
             foreach ($connections as $index => $connection) {
                 $updated = $this->rowsOf(DB::connection($connection), $table, $shardKey, $from, $filter)
-                    ->update([$shardKey => $to]);
+                    ->update([
+                        $shardKey => $to,
+                        // a connection that was the key's primary can be a
+                        // replica of the new one, and the other way round: the
+                        // flag says which, and a stale one would present a
+                        // replica as a second primary
+                        'is_replica' => $this->isReplicaOn($connection, $targets),
+                    ]);
 
                 // counted once, on the primary: the replicas hold the same
                 // rows and counting them again would report a multiple
@@ -141,6 +165,19 @@ class ShardMover
         }
 
         return $moved;
+    }
+
+    /**
+     * Whether a connection holds a replica under the new placement.
+     *
+     * @param string $connection The connection.
+     * @param list<string> $targets The new placement, primary first.
+     *
+     * @return bool
+     */
+    protected function isReplicaOn(string $connection, array $targets): bool
+    {
+        return ($targets[0] ?? null) !== $connection;
     }
 
     /**
@@ -161,8 +198,8 @@ class ShardMover
      * @param array<string, string> $tables The tables, by their shard key column.
      * @param mixed $from The key the rows have now.
      * @param mixed $to The key they are moving to.
+     * @param list<string> $targets The new placement, primary first.
      * @param callable|null $filter Narrows what moves.
-     * @param bool $counted Whether these rows are this move's own count.
      *
      * @return int
      */
@@ -173,8 +210,8 @@ class ShardMover
         array $tables,
         mixed $from,
         mixed $to,
+        array $targets,
         ?callable $filter,
-        bool $counted,
     ): int {
         if ($arriving === [] && $leaving === []) {
             return 0;
@@ -185,40 +222,74 @@ class ShardMover
         $moved = 0;
 
         foreach ($tables as $table => $shardKey) {
-            $ids = [];
+            $rowKey = $this->rowKeyOf($table);
+            $keys = [];
 
             $this->rowsOf($primary, $table, $shardKey, $from, $filter)
-                ->orderBy('id')
-                ->chunk(self::CHUNK, function (Collection $rows) use ($arriving, $table, $shardKey, $to, &$ids): void {
-                    $values = $rows->map(static function (object $row) use ($shardKey, $to): array {
-                        $columns = (array) $row;
-                        $columns[$shardKey] = $to;
-
-                        return $columns;
-                    })->all();
-
+                ->orderBy($rowKey)
+                ->chunk(self::CHUNK, function (Collection $rows) use (
+                    $arriving,
+                    $table,
+                    $shardKey,
+                    $to,
+                    $targets,
+                    $rowKey,
+                    &$keys,
+                ): void {
                     foreach ($arriving as $target) {
-                        DB::connection($target)->table($table)->insert($values);
+                        DB::connection($target)->table($table)->insert(
+                            $rows->map(function (object $row) use ($shardKey, $to, $target, $targets): array {
+                                $columns = (array) $row;
+                                $columns[$shardKey] = $to;
+                                // the copy's place in the new placement, not
+                                // the one it had in the old
+                                $columns['is_replica'] = $this->isReplicaOn($target, $targets);
+
+                                return $columns;
+                            })->all(),
+                        );
                     }
 
                     foreach ($rows as $row) {
-                        $ids[] = $row->id;
+                        $keys[] = $row->{$rowKey};
                     }
                 });
 
-            $copied[$table] = $ids;
-            $moved += count($ids);
+            $copied[$table] = [$rowKey, $keys];
+            $moved += count($keys);
         }
 
-        foreach ($copied as $table => $ids) {
-            foreach (array_chunk($ids, self::CHUNK) as $chunk) {
+        /*
+        | Backwards, so a child is gone before the parent it points at: the
+        | tables are given parent first, which is what the copy needs to
+        | satisfy the constraints on the other side, and deleting in that
+        | same order would trip a RESTRICT on this one.
+        */
+        foreach (array_reverse($copied, preserve_keys: true) as $table => [$rowKey, $keys]) {
+            foreach (array_chunk($keys, self::CHUNK) as $chunk) {
                 foreach ($leaving as $source) {
-                    DB::connection($source)->table($table)->whereIn('id', $chunk)->delete();
+                    DB::connection($source)->table($table)->whereIn($rowKey, $chunk)->delete();
                 }
             }
         }
 
-        return $counted ? $moved : 0;
+        return $moved;
+    }
+
+    /**
+     * The column a table's own rows are identified by.
+     *
+     * `id` unless a model says otherwise: a shardable model may declare its
+     * own key, and ordering a chunked read by a column that is not there
+     * fails after earlier tables have already been copied.
+     *
+     * @param string $table The table.
+     *
+     * @return string
+     */
+    protected function rowKeyOf(string $table): string
+    {
+        return $this->rowKeys[$table] ?? 'id';
     }
 
     /**
@@ -255,16 +326,35 @@ class ShardMover
     protected function keyedTables(Model|string $model, array $tables): array
     {
         $ownKey = $this->shardKeyOf($model);
+        $ownRowKey = $model instanceof Model ? $model->getKeyName() : 'id';
         $keyed = [];
 
-        foreach ($tables as $table => $shardKey) {
+        foreach ($tables as $table => $entry) {
+            // a plain list: the model's own columns
             if (is_int($table)) {
-                $keyed[$shardKey] = $ownKey;
+                $keyed[$entry] = $ownKey;
+                $this->rowKeys[$entry] = $ownRowKey;
 
                 continue;
             }
 
-            $keyed[$table] = $shardKey;
+            /*
+            | `table => shard key`, or a model class, which is how a table
+            | whose primary key is not `id` says so: one colocation group can
+            | key its tables differently, and so can name their rows
+            | differently.
+            */
+            if (is_subclass_of($entry, Model::class)) {
+                $instance = new $entry();
+
+                $keyed[$table] = $this->shardKeyOf($instance);
+                $this->rowKeys[$table] = $instance->getKeyName();
+
+                continue;
+            }
+
+            $keyed[$table] = $entry;
+            $this->rowKeys[$table] ??= 'id';
         }
 
         return $keyed;
