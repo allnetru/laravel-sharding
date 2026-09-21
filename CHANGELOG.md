@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.5.6 - 2026-09-21
+
+### Fixed
+
+- **An aggregate keeps its shard.** `first()` is a limit, and a limit had the primary key added to it so rows could be merged across shards. An aggregate over the whole result has one row and no column to order it by — Postgres refuses `order by id` on a query with no `group by` — so applications worked around it with `toBase()`, which drops the routing and reads whichever shard is first. A tenant on the second shard was counted on the first and answered zero over 275 rows.
+- **An unpinned raw aggregate is refused rather than answered wrongly.** Every shard answers its own `selectRaw('sum(value) as total')` and nothing says how to add them up; on databases that accept `order by id` there, one shard's row came back as the answer for all of them. It now throws `UnsupportedCrossShardQuery`, the way a grouped or distinct aggregate already did. `count()`, `sum()` and `avg()` are unaffected — they have their own paths and do combine.
+- **What counts as collapsing is spelled out.** A window (`sum(value) over (…)`) answers per row, `ST_Dump` and its kin return a row per piece, `ST_AsText` is scalar, and `min`/`max` are aggregates over one argument and scalars over two. The PostGIS aggregates are named one by one instead of matching every `st_*`.
+
 ## v0.5.5 - 2026-09-21
 
 ### Fixed
