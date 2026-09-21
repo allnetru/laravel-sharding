@@ -441,6 +441,7 @@ class ShardBuilder extends EloquentBuilder
         }
 
         $this->refuseUnmergeableOrder('get');
+        $this->refuseUnpinnedRawAggregate('get');
 
         $limit = $this->getQuery()->limit;
         $offset = $this->getQuery()->offset;
@@ -795,11 +796,213 @@ class ShardBuilder extends EloquentBuilder
             return;
         }
 
-        if (empty($this->getQuery()->orders)) {
+        /*
+        | An aggregate over the whole result has one row and nothing to order
+        | it by: Postgres refuses `order by id` on a query with no `group by`,
+        | and working around it with `toBase()` drops the routing entirely.
+        |
+        | Only when the query names one shard. Unpinned, each shard answers
+        | its own aggregate and the bound would keep whichever came first —
+        | a sum over one shard presented as the sum over all of them. Those
+        | still take the ordering, and the merge refuses them by other means.
+        */
+        if (empty($this->getQuery()->orders) && !($this->isBareAggregate() && $this->readsOneShard())) {
             $builder->orderBy($this->getModel()->getKeyName());
         }
 
         $builder->limit($bound);
+    }
+
+    /**
+     * Refuse a raw aggregate that no shard key pins.
+     *
+     * Every shard answers its own `sum(…)`, and there is no honest way to add
+     * them up here: the rows carry whatever the select list named and nothing
+     * says how to combine them. Ordering does not save it either — on SQLite
+     * `order by id` over a query with no `group by` is accepted, and one
+     * shard's row is then returned as the answer for all of them. The named
+     * aggregates — count(), sum(), avg() — have their own paths and do
+     * combine; this is for `selectRaw('sum(value) as total')`.
+     *
+     * @param string $method The method being called, for the message.
+     *
+     * @return void
+     *
+     * @throws UnsupportedCrossShardQuery
+     */
+    protected function refuseUnpinnedRawAggregate(string $method): void
+    {
+        if (!$this->isBareAggregate() || $this->readsOneShard()) {
+            return;
+        }
+
+        throw new UnsupportedCrossShardQuery(sprintf(
+            '%s::%s() cannot combine a raw aggregate across shards: each shard answers its own, and nothing here says how to add them up. Give the shard key a single value with where(), pick the connection with onShardConnection(), or use count()/sum()/avg(), which combine.',
+            $this->getModel()::class,
+            $method,
+        ));
+    }
+
+    /**
+     * Whether this query resolves to a single shard.
+     *
+     * @return bool
+     */
+    protected function readsOneShard(): bool
+    {
+        if ($this->singleConnection) {
+            return true;
+        }
+
+        $all = app(ShardingManager::class)->connectionsFor($this->getModel());
+        $pinned = $this->connectionsFromShardKey($all);
+
+        return $pinned !== null && count($pinned) === 1;
+    }
+
+    /**
+     * Whether the query aggregates the whole result into one row.
+     *
+     * Every selected item is an aggregate call and nothing groups them, so
+     * there is one row per shard and no column that could order it.
+     *
+     * @return bool
+     */
+    protected function isBareAggregate(): bool
+    {
+        $query = $this->getQuery();
+
+        if (!empty($query->groups) || empty($query->columns)) {
+            return false;
+        }
+
+        foreach ($query->columns as $column) {
+            $sql = $column instanceof Expression
+                ? (string) $column->getValue($query->getGrammar())
+                : (string) $column;
+
+            /*
+            | Every selected item, and selectRaw hands them over as one
+            | string: `count(*) as total, st_asewkt(st_collect(geom)) as hull`
+            | is a single column here. Splitting on the commas that sit
+            | outside parentheses is what tells them apart.
+            */
+            foreach ($this->selectedItems($sql) as $item) {
+                if (!$this->collapsesToOneRow($item)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Whether one selected item collapses every row into one.
+     *
+     * The aggregate has to be the outermost call: `st_asewkt(st_collect(geom))`
+     * collapses because `st_collect` does, while `st_astext(geom)` answers per
+     * row and is not an aggregate at all. A window turns any of them back into
+     * one row per input row, so `sum(value) over (…)` is not one either.
+     *
+     * @param string $item One item of the select list.
+     *
+     * @return bool
+     */
+    protected function collapsesToOneRow(string $item): bool
+    {
+        /*
+        | A window turns an aggregate back into one row per input row, so
+        | `sum(value) over (…)` collapses nothing. It is refused here rather
+        | than left to the leading function name, which reads it as a plain
+        | sum.
+        */
+        if (preg_match('/\)\s*over\s*(\(|\w)/i', $item) === 1) {
+            return false;
+        }
+
+        if (preg_match('/^\s*(count|sum|avg|min|max)\s*\(/i', $item, $named) === 1) {
+            /*
+            | min() and max() are aggregates over one argument and scalars
+            | over two: SQLite's `max(value, 10)` answers per row, and calling
+            | it collapsing would refuse an ordinary query and drop the
+            | ordering from a pinned one.
+            */
+            return !in_array(strtolower($named[1]), ['min', 'max'], true)
+                || count($this->argumentsOf($item)) === 1;
+        }
+
+        // the PostGIS aggregates, spelled out: every other st_* answers per row
+        return preg_match(
+            '/^\s*st_(collect|union|extent|memunion|memcollect|polygonize|makeline|clusterintersecting|clusterwithin|coverageunion)\s*\(/i',
+            $item,
+        ) === 1
+            // a wrapper around one, as long as the wrapper itself answers
+            // once: st_dump and its kin return a row per piece
+            || (preg_match('/^\s*st_(dump|dumppoints|dumprings|dumpsegments|subdivide|segmentize|voronoipolygons|voronoilines|clusterdbscan|clusterkmeans)\s*\(/i', $item) !== 1
+                && preg_match('/^\s*st_\w+\s*\(\s*st_(collect|union|extent|memunion|polygonize|makeline)\s*\(/i', $item) === 1);
+    }
+
+    /**
+     * The arguments of the outermost call in an expression.
+     *
+     * @param string $item One item of the select list.
+     *
+     * @return list<string> Empty when the expression is not a call.
+     */
+    protected function argumentsOf(string $item): array
+    {
+        $open = strpos($item, '(');
+
+        if ($open === false) {
+            return [];
+        }
+
+        $depth = 0;
+        $length = strlen($item);
+
+        for ($position = $open; $position < $length; $position++) {
+            if ($item[$position] === '(') {
+                $depth++;
+            } elseif ($item[$position] === ')' && --$depth === 0) {
+                return $this->selectedItems(substr($item, $open + 1, $position - $open - 1));
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * The items of a select list, split on the commas between them.
+     *
+     * @param string $sql The select list, as written.
+     *
+     * @return list<string>
+     */
+    protected function selectedItems(string $sql): array
+    {
+        $items = [];
+        $depth = 0;
+        $current = '';
+
+        foreach (str_split($sql) as $character) {
+            if ($character === '(') {
+                $depth++;
+            } elseif ($character === ')') {
+                $depth--;
+            } elseif ($character === ',' && $depth === 0) {
+                $items[] = $current;
+                $current = '';
+
+                continue;
+            }
+
+            $current .= $character;
+        }
+
+        $items[] = $current;
+
+        return $items;
     }
 
     /**
