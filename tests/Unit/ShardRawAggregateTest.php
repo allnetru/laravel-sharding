@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Throwable;
 
 /**
  * A raw aggregate read with first() keeps its shard.
@@ -94,6 +95,52 @@ class ShardRawAggregateTest extends TestCase
 
         $this->assertSame(1, $rows->count());
         $this->assertSame(2, (int) $rows->first()->getAttribute('total'));
+    }
+
+    public function testAnUnpinnedAggregateIsNotAnsweredFromOneShard(): void
+    {
+        DB::connection('shard_1')->table('orders')->insert(['id' => 1, 'tenant_id' => 7, 'value' => 10]);
+        DB::connection('shard_2')->table('orders')->insert(['id' => 2, 'tenant_id' => 8, 'value' => 32]);
+
+        $sql = [];
+        DB::connection('shard_1')->listen(static function ($query) use (&$sql): void {
+            $sql[] = $query->sql;
+        });
+
+        /*
+        | No shard key, so every shard answers its own aggregate and the merge
+        | has to pick between them. Skipping the ordering here would leave the
+        | bound keeping whichever row arrived first — one shard's sum presented
+        | as the sum over all of them — so the ordering stays and the merge
+        | refuses the query by its own means.
+        */
+        try {
+            RawAggregatedOrder::query()
+                ->selectRaw('sum(value) as summed')
+                ->first();
+        } catch (Throwable $refused) {
+            $this->assertInstanceOf(Throwable::class, $refused);
+
+            return;
+        }
+
+        $this->assertNotEmpty($sql);
+        $this->assertStringContainsString('order by', strtolower(implode(' ', $sql)));
+    }
+
+    public function testAWindowIsNotAnAggregateThatCollapses(): void
+    {
+        $builder = RawAggregatedOrder::query()->selectRaw('sum(value) over (order by id) as running');
+
+        $collapses = new \ReflectionMethod($builder, 'collapsesToOneRow');
+        $collapses->setAccessible(true);
+
+        // a window answers one row per input row, and the leading `sum(` would
+        // otherwise read it as an aggregate that collapses
+        $this->assertFalse($collapses->invoke($builder, 'sum(value) over (order by id) as running'));
+        $this->assertFalse($collapses->invoke($builder, 'st_astext(geom) as outline'));
+        $this->assertTrue($collapses->invoke($builder, 'count(*) as total'));
+        $this->assertTrue($collapses->invoke($builder, 'st_asewkt(st_collect(geom)) as hull'));
     }
 
     /**

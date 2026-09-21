@@ -795,15 +795,38 @@ class ShardBuilder extends EloquentBuilder
             return;
         }
 
-        // an aggregate over the whole result has one row and nothing to
-        // order it by: Postgres refuses `order by id` on a query with no
-        // `group by`, and working around it with `toBase()` drops the
-        // routing and reads whichever shard happens to be first
-        if (empty($this->getQuery()->orders) && !$this->isBareAggregate()) {
+        /*
+        | An aggregate over the whole result has one row and nothing to order
+        | it by: Postgres refuses `order by id` on a query with no `group by`,
+        | and working around it with `toBase()` drops the routing entirely.
+        |
+        | Only when the query names one shard. Unpinned, each shard answers
+        | its own aggregate and the bound would keep whichever came first —
+        | a sum over one shard presented as the sum over all of them. Those
+        | still take the ordering, and the merge refuses them by other means.
+        */
+        if (empty($this->getQuery()->orders) && !($this->isBareAggregate() && $this->readsOneShard())) {
             $builder->orderBy($this->getModel()->getKeyName());
         }
 
         $builder->limit($bound);
+    }
+
+    /**
+     * Whether this query resolves to a single shard.
+     *
+     * @return bool
+     */
+    protected function readsOneShard(): bool
+    {
+        if ($this->singleConnection) {
+            return true;
+        }
+
+        $all = app(ShardingManager::class)->connectionsFor($this->getModel());
+        $pinned = $this->connectionsFromShardKey($all);
+
+        return $pinned !== null && count($pinned) === 1;
     }
 
     /**
@@ -834,13 +857,49 @@ class ShardBuilder extends EloquentBuilder
             | outside parentheses is what tells them apart.
             */
             foreach ($this->selectedItems($sql) as $item) {
-                if (preg_match('/^\s*(count|sum|avg|min|max|st_\w+)\s*\(/i', $item) !== 1) {
+                if (!$this->collapsesToOneRow($item)) {
                     return false;
                 }
             }
         }
 
         return true;
+    }
+
+    /**
+     * Whether one selected item collapses every row into one.
+     *
+     * The aggregate has to be the outermost call: `st_asewkt(st_collect(geom))`
+     * collapses because `st_collect` does, while `st_astext(geom)` answers per
+     * row and is not an aggregate at all. A window turns any of them back into
+     * one row per input row, so `sum(value) over (…)` is not one either.
+     *
+     * @param string $item One item of the select list.
+     *
+     * @return bool
+     */
+    protected function collapsesToOneRow(string $item): bool
+    {
+        /*
+        | A window turns an aggregate back into one row per input row, so
+        | `sum(value) over (…)` collapses nothing. It is refused here rather
+        | than left to the leading function name, which reads it as a plain
+        | sum.
+        */
+        if (preg_match('/\)\s*over\s*(\(|\w)/i', $item) === 1) {
+            return false;
+        }
+
+        if (preg_match('/^\s*(count|sum|avg|min|max)\s*\(/i', $item) === 1) {
+            return true;
+        }
+
+        // the PostGIS aggregates, spelled out: every other st_* answers per row
+        return preg_match(
+            '/^\s*st_(collect|union|extent|memunion|memcollect|polygonize|makeline|clusterintersecting|clusterwithin|coverageunion)\s*\(/i',
+            $item,
+        ) === 1
+            || preg_match('/^\s*st_\w+\s*\(\s*st_(collect|union|extent|memunion|polygonize|makeline)\s*\(/i', $item) === 1;
     }
 
     /**
