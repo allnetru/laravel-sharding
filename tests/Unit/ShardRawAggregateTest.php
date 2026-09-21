@@ -154,6 +154,56 @@ class ShardRawAggregateTest extends TestCase
         $this->assertTrue($collapses->invoke($builder, 'st_astext(st_centroid(st_union(geom))) as t'));
     }
 
+    public function testEveryBoundedReadRefusesTheSameQuery(): void
+    {
+        DB::connection('shard_1')->table('orders')->insert(['id' => 1, 'tenant_id' => 7, 'value' => 10]);
+        DB::connection('shard_2')->table('orders')->insert(['id' => 2, 'tenant_id' => 8, 'value' => 32]);
+
+        // paginate() and cursor() are bounded reads like get(): answering an
+        // unpinned aggregate from whichever shard came first presents one
+        // shard's sum as the total
+        foreach (['get', 'first', 'cursor', 'paginate'] as $method) {
+            $refused = false;
+
+            try {
+                $answer = RawAggregatedOrder::query()
+                    ->selectRaw('sum(value) as summed')
+                    ->{$method}();
+
+                // cursor() is lazy, so the refusal waits for the first read
+                if ($answer instanceof \Traversable) {
+                    iterator_to_array($answer);
+                }
+            } catch (UnsupportedCrossShardQuery) {
+                $refused = true;
+            }
+
+            $this->assertTrue($refused, sprintf('%s() answered an unpinned raw aggregate', $method));
+        }
+    }
+
+    public function testTheRebalanceSwitchDoesNotChangeWhatAQueryMayBe(): void
+    {
+        [$mine] = $this->shardsOf(7);
+
+        DB::connection($mine)->table('orders')->insert(['id' => 1, 'tenant_id' => 7, 'value' => 42]);
+
+        /*
+        | `pin_by_key` is turned off while a rebalance moves rows, and it
+        | promises to change how many connections are asked and never what a
+        | query returns. Reading it here turned a pinned aggregate into a
+        | refusal for the duration of every rebalance.
+        */
+        config(['sharding.pin_by_key' => false]);
+
+        $row = RawAggregatedOrder::query()
+            ->where('tenant_id', 7)
+            ->selectRaw('sum(value) as summed')
+            ->first();
+
+        $this->assertSame(42, (int) $row->getAttribute('summed'));
+    }
+
     /**
      * @return array{0: string, 1: string}
      */
