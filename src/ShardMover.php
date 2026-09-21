@@ -7,6 +7,7 @@ use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * Moving everything one shard key owns to another key.
@@ -37,6 +38,13 @@ class ShardMover
      * @var array<string, string>
      */
     protected array $rowKeys = [];
+
+    /**
+     * Which tables record a replica flag.
+     *
+     * @var array<string, bool>
+     */
+    protected array $replicaFlags = [];
 
     /**
      * @param ShardingManager $shards Resolves which connection a key names.
@@ -146,15 +154,21 @@ class ShardMover
 
         foreach ($tables as $table => $shardKey) {
             foreach ($connections as $index => $connection) {
+                $values = [$shardKey => $to];
+
+                /*
+                | A connection that was the key's primary can be a replica of
+                | the new one, and the other way round: the flag says which,
+                | and a stale one would present a replica as a second primary.
+                | Only where the table keeps the flag — a table replicated by
+                | nothing does not carry it.
+                */
+                if ($this->keepsReplicaFlag($connection, $table)) {
+                    $values['is_replica'] = $this->isReplicaOn($connection, $targets);
+                }
+
                 $updated = $this->rowsOf(DB::connection($connection), $table, $shardKey, $from, $filter)
-                    ->update([
-                        $shardKey => $to,
-                        // a connection that was the key's primary can be a
-                        // replica of the new one, and the other way round: the
-                        // flag says which, and a stale one would present a
-                        // replica as a second primary
-                        'is_replica' => $this->isReplicaOn($connection, $targets),
-                    ]);
+                    ->update($values);
 
                 // counted once, on the primary: the replicas hold the same
                 // rows and counting them again would report a multiple
@@ -165,6 +179,23 @@ class ShardMover
         }
 
         return $moved;
+    }
+
+    /**
+     * Whether a table records which of its copies is the replica.
+     *
+     * Not every sharded table does: one that nothing replicates has no such
+     * column, and writing the flag to it fails.
+     *
+     * @param string $connection Where the table is.
+     * @param string $table The table.
+     *
+     * @return bool
+     */
+    protected function keepsReplicaFlag(string $connection, string $table): bool
+    {
+        return $this->replicaFlags[$table] ??= Schema::connection($connection)
+            ->hasColumn($table, 'is_replica');
     }
 
     /**
@@ -241,9 +272,12 @@ class ShardMover
                             $rows->map(function (object $row) use ($shardKey, $to, $target, $targets): array {
                                 $columns = (array) $row;
                                 $columns[$shardKey] = $to;
+
                                 // the copy's place in the new placement, not
                                 // the one it had in the old
-                                $columns['is_replica'] = $this->isReplicaOn($target, $targets);
+                                if (array_key_exists('is_replica', $columns)) {
+                                    $columns['is_replica'] = $this->isReplicaOn($target, $targets);
+                                }
 
                                 return $columns;
                             })->all(),
