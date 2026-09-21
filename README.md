@@ -270,9 +270,9 @@ app(ShardMover::class)->move(
 // a group can key its tables differently, and name their rows differently:
 // give the column, or the model, per table
 app(ShardMover::class)->move(new User(), [
-    'users' => 'id',
     'user_roles' => UserRole::class,
-], from: $userId, to: $mergedInto);
+    'user_permissions' => UserPermission::class,
+], from: $userId, to: $keptUserId);
 ```
 
 Within one shard it is an update. Across two it is a chunked copy followed by
@@ -280,8 +280,16 @@ a delete, in that order: a row present twice for an instant is recoverable, a
 row absent from both is not. The filter narrows what moves, so a tenant can
 move one settlement rather than everything it owns.
 
-It moves rows and nothing else — whether the move is allowed is the
-application's to decide.
+The owning table is left out of that second example on purpose: moving
+`users` from one identifier to another would rewrite the row's own primary key
+onto a row that already exists. What moves is what *belongs* to the key, and
+the row the key names is the application's to deal with.
+
+**It moves rows and nothing else.** Whether the move is allowed is the
+application's to decide, and so is what happens if it is interrupted: there is
+no transaction across connections, so a failure part-way leaves rows copied
+but not yet deleted. Run it where a retry is safe — a queued job whose work is
+idempotent — or take the settlement offline for the duration.
 
 ### Transactions
 
