@@ -40,7 +40,7 @@ class ShardMover
     protected array $rowKeys = [];
 
     /**
-     * Which tables record a replica flag.
+     * Which tables record a replica flag, by connection and table.
      *
      * @var array<string, bool>
      */
@@ -194,7 +194,10 @@ class ShardMover
      */
     protected function keepsReplicaFlag(string $connection, string $table): bool
     {
-        return $this->replicaFlags[$table] ??= Schema::connection($connection)
+        // by connection as well as table: two shards can disagree while a
+        // migration is half-run, and one deciding for the other writes the
+        // flag where there is no column, or skips it where there is
+        return $this->replicaFlags[$connection . '.' . $table] ??= Schema::connection($connection)
             ->hasColumn($table, 'is_replica');
     }
 

@@ -854,10 +854,14 @@ class ShardBuilder extends EloquentBuilder
             return true;
         }
 
-        $all = app(ShardingManager::class)->connectionsFor($this->getModel());
-        $pinned = $this->connectionsFromShardKey($all);
-
-        return $pinned !== null && count($pinned) === 1;
+        /*
+        | What the query will actually run on, not what its key could name.
+        | With `pin_by_key` off for a rebalance, a keyed query still fans out
+        | — so a raw aggregate is answered by every shard and the bound keeps
+        | whichever row came first. It stays refused for that window, which
+        | is the honest answer: there is no shard to attribute it to.
+        */
+        return count($this->connections()) === 1;
     }
 
     /**
@@ -1135,6 +1139,7 @@ class ShardBuilder extends EloquentBuilder
         }
 
         $this->refuseUnmergeableOrder('cursor');
+        $this->refuseUnpinnedRawAggregate('cursor');
 
         return new LazyCollection(function (): Generator {
             $iterators = [];
@@ -1292,6 +1297,7 @@ class ShardBuilder extends EloquentBuilder
         }
 
         $this->refuseUnmergeableOrder('paginate');
+        $this->refuseUnpinnedRawAggregate('paginate');
 
         $page = $page ?: Paginator::resolveCurrentPage($pageName);
         $perPage = $perPage ?: $this->getModel()->getPerPage();

@@ -154,6 +154,56 @@ class ShardRawAggregateTest extends TestCase
         $this->assertTrue($collapses->invoke($builder, 'st_astext(st_centroid(st_union(geom))) as t'));
     }
 
+    public function testEveryBoundedReadRefusesTheSameQuery(): void
+    {
+        DB::connection('shard_1')->table('orders')->insert(['id' => 1, 'tenant_id' => 7, 'value' => 10]);
+        DB::connection('shard_2')->table('orders')->insert(['id' => 2, 'tenant_id' => 8, 'value' => 32]);
+
+        // paginate() and cursor() are bounded reads like get(): answering an
+        // unpinned aggregate from whichever shard came first presents one
+        // shard's sum as the total
+        foreach (['get', 'first', 'cursor', 'paginate'] as $method) {
+            $refused = false;
+
+            try {
+                $answer = RawAggregatedOrder::query()
+                    ->selectRaw('sum(value) as summed')
+                    ->{$method}();
+
+                // cursor() is lazy, so the refusal waits for the first read
+                if ($answer instanceof \Traversable) {
+                    iterator_to_array($answer);
+                }
+            } catch (UnsupportedCrossShardQuery) {
+                $refused = true;
+            }
+
+            $this->assertTrue($refused, sprintf('%s() answered an unpinned raw aggregate', $method));
+        }
+    }
+
+    public function testARebalanceLeavesTheAggregateRefused(): void
+    {
+        [$mine] = $this->shardsOf(7);
+
+        DB::connection($mine)->table('orders')->insert(['id' => 1, 'tenant_id' => 7, 'value' => 42]);
+
+        /*
+        | `pin_by_key` is turned off while a rebalance moves rows, and a keyed
+        | query then fans out — so every shard answers its own aggregate and
+        | there is no shard to attribute the total to. Refused, rather than
+        | answered from whichever came first.
+        */
+        config(['sharding.pin_by_key' => false]);
+
+        $this->expectException(UnsupportedCrossShardQuery::class);
+
+        RawAggregatedOrder::query()
+            ->where('tenant_id', 7)
+            ->selectRaw('sum(value) as summed')
+            ->first();
+    }
+
     /**
      * @return array{0: string, 1: string}
      */
