@@ -297,7 +297,22 @@ trait Shardable
             $this->setAttribute($keyName, $key);
         }
 
-        $key = self::normaliseShardKey($key);
+        /*
+        | Written back to the attribute, not just used locally.
+        |
+        | Everything downstream reads the attribute again — the `created` hook
+        | hands it to `recordMeta()`, and `shards:distribute` reads it off the
+        | stored row. Normalising only the local copy routed the insert by one
+        | value and recorded its placement under another, which is worse than
+        | the bug this fix started on: the slot of an unrelated key gets
+        | overwritten while the row's own slot stays unrecorded.
+        */
+        $normalised = self::normaliseShardKey($key);
+
+        if ($normalised !== $key) {
+            $this->setAttribute($keyName, $normalised);
+            $key = $normalised;
+        }
 
         [$strategy, $config] = $manager->strategyFor($this);
         $connections = $strategy->determine($key, $config);

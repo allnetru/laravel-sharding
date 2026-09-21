@@ -131,6 +131,16 @@ class ShardKeyZeroTest extends TestCase
         $stored->save();
 
         $this->assertSame($stored->getConnectionName(), $written->getConnectionName());
+
+        /*
+        | And the attribute itself is normalised, not merely the value used to
+        | route. Everything downstream reads it again — the `created` hook
+        | hands it to `recordMeta()` — so a row routed by one value and
+        | recorded under another would overwrite an unrelated key's slot while
+        | leaving its own unrecorded.
+        */
+        $this->assertSame(0, $written->tenant_id);
+        $this->assertNotSame(false, $written->tenant_id);
     }
 
     /**
