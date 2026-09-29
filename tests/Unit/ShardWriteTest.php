@@ -136,6 +136,33 @@ class ShardWriteTest extends TestCase
         $this->assertSame(10, (int) Ticket::sum('value'));
     }
 
+    public function testIncrementEachAndDecrementEachReachEveryShard(): void
+    {
+        $this->assertSame(4, Ticket::where('value', '>', 0)->incrementEach(['value' => 10]));
+        $this->assertSame(50, (int) Ticket::sum('value'));
+        $this->assertSame(2, $this->rowsOn('shard_1'));
+        $this->assertSame(2, $this->rowsOn('shard_2'));
+
+        $this->assertSame(4, Ticket::where('value', '>', 0)->decrementEach(['value' => 10]));
+        $this->assertSame(10, (int) Ticket::sum('value'));
+    }
+
+    public function testAPinnedIncrementEachTouchesOnlyItsShard(): void
+    {
+        $touched = Ticket::query()->onShardConnection('shard_1')->where('value', '>', 0)->incrementEach(['value' => 100]);
+
+        $this->assertSame(2, $touched);
+        $this->assertSame(210, (int) Ticket::sum('value'));
+    }
+
+    public function testIncrementEachCannotChangeTheShardKey(): void
+    {
+        $this->expectException(UnsupportedCrossShardQuery::class);
+        $this->expectExceptionMessageMatches('/it is the shard key/');
+
+        Ticket::where('value', '>', 0)->incrementEach(['value' => 1, 'tenant_id' => 1]);
+    }
+
     public function testAWriteWithALimitIsRefused(): void
     {
         // five rows means five, not five per shard

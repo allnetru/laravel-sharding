@@ -1617,6 +1617,48 @@ class ShardBuilder extends EloquentBuilder
     /**
      * @inheritdoc
      *
+     * Declared here rather than left to the parent: Laravel 12's Eloquent
+     * builder has no incrementEach(), so the call fell through to the query
+     * builder of the model's default connection, and Laravel 13's goes through
+     * toBase() without choosing a shard either — the counters of a sharded row
+     * were added on a database that does not hold it.
+     */
+    public function incrementEach(array $columns, array $extra = [])
+    {
+        if ($this->singleConnection) {
+            return $this->toBase()->incrementEach($columns, $this->addUpdatedAtColumn($extra));
+        }
+
+        $this->refuseBoundedWrite('incrementEach');
+        $this->refuseShardKeyChange($columns + $extra, 'incrementEach');
+
+        return $this->writeAcrossShards(
+            static fn (self $builder): int => (int) $builder->incrementEach($columns, $extra),
+        );
+    }
+
+    /**
+     * @inheritdoc
+     *
+     * Declared here for the reason incrementEach() is.
+     */
+    public function decrementEach(array $columns, array $extra = [])
+    {
+        if ($this->singleConnection) {
+            return $this->toBase()->decrementEach($columns, $this->addUpdatedAtColumn($extra));
+        }
+
+        $this->refuseBoundedWrite('decrementEach');
+        $this->refuseShardKeyChange($columns + $extra, 'decrementEach');
+
+        return $this->writeAcrossShards(
+            static fn (self $builder): int => (int) $builder->decrementEach($columns, $extra),
+        );
+    }
+
+    /**
+     * @inheritdoc
+     *
      * Refused rather than fanned out. Every other write here repeats one
      * statement on each shard, which works because the rows a shard owns are
      * the rows it should change. An upsert does not fit that: each row belongs

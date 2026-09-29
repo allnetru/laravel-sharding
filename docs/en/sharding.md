@@ -510,8 +510,9 @@ its scopes existed to hide.
 
 ### Writes
 
-`update`, `delete`, `forceDelete`, `increment` and `decrement` run on every
-shard and report the rows all of them touched together. `restore()` comes with
+`update`, `delete`, `forceDelete`, `increment`, `decrement`, `incrementEach`
+and `decrementEach` run on every shard and report the rows all of them touched
+together. `restore()` comes with
 them, because SoftDeletes implements it as an `update`, and a soft delete stays
 soft: the per-shard copy carries the model's global scopes, so registering
 SoftDeletes puts its delete callback back.
@@ -720,8 +721,8 @@ Three more consequences worth knowing:
 - **The fan-out covers the methods it overrides, and that list is now
   complete for ordinary Eloquent.** `get`, `cursor`, `pluck`, `chunk`,
   `chunkById`, `paginate`, `firstOrCreate`, `updateOrCreate`, the aggregates,
-  `exists`, `update`, `delete`, `forceDelete`, `increment`, `decrement` and
-  `truncate`. What cannot be answered from parts — a grouped or distinct
+  `exists`, `update`, `delete`, `forceDelete`, `increment`, `decrement`,
+  `incrementEach`, `decrementEach` and `truncate`. What cannot be answered from parts — a grouped or distinct
   aggregate, a bounded write, a write to the shard key, `upsert`, a raw order,
   a join — throws `UnsupportedCrossShardQuery` rather than answering from one
   shard. Anything reached through `toBase()` bypasses all of this by
