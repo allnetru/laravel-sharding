@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.6.2 - 2026-09-29
+
+### Fixed
+
+- **`incrementEach()` and `decrementEach()` never reached a shard.** Laravel 12's Eloquent builder has no `incrementEach()`, so on a sharded model the call fell through to the query builder of the default connection; Laravel 13's goes through `toBase()` without choosing a shard either. The counters of a sharded row were added on a database that does not hold it. Both are now routed the way `increment()` and `decrement()` are: pinned to one connection when the query is, fanned out otherwise, a bounded write and a write to the shard key refused.
+
 ## v0.6.1 - 2026-09-21
 
 ### Fixed
@@ -27,6 +33,7 @@ app(ShardMover::class)->move(
     to: $newTenantId,
     filter: fn ($query) => $query->where('settlement_id', $settlement->getKey()),
 );
+
 
 
 ```
