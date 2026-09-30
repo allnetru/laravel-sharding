@@ -124,7 +124,8 @@ return [
     | cache lags the metadata by one write across every process sharing the
     | store; namespaced by the connection list, so adding a shard is a new
     | namespace rather than a window of stale answers. A store that cannot be
-    | reached is simply not consulted.
+    | reached is simply not consulted. Within one request or one queued job
+    | each slot is asked of the store once and then answered from memory.
     |
     | `store` names a cache store from config/cache.php; null means the
     | default one. Prefer something in memory and shared — Redis or Valkey.
