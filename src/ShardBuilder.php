@@ -1497,6 +1497,11 @@ class ShardBuilder extends EloquentBuilder
      * produces a number that looks plausible and is wrong, which is the one
      * outcome worth throwing over.
      *
+     * Only when there is more than one answer to add up. A query whose shard
+     * key names one shard is not combined at all — its one shard answers the
+     * question as asked — and refusing it turned `where('user_id', 5)
+     * ->distinct()->count('letter_id')` into an error for no reason.
+     *
      * @param string $method
      * @return void
      *
@@ -1504,6 +1509,10 @@ class ShardBuilder extends EloquentBuilder
      */
     protected function refuseUncombinableAggregate(string $method): void
     {
+        if ($this->readsOneShard()) {
+            return;
+        }
+
         $query = $this->getQuery();
 
         $reason = match (true) {
