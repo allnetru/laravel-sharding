@@ -65,6 +65,35 @@ class ShardKeyedAggregateTest extends TestCase
         $this->assertSame(300, (int) KeyedLetter::query()->where('user_id', 7)->distinct()->sum('letter_id'));
     }
 
+    public function testAGroupedCountIsAnsweredOnTheKeysShard(): void
+    {
+        // one row per letter, counted by the shard that holds them all
+        $this->assertSame(2, KeyedLetter::query()->where('user_id', 7)->groupBy('letter_id')->get(['letter_id'])->count());
+        $this->assertSame(2, (int) KeyedLetter::query()->where('user_id', 7)->groupBy('letter_id')->count());
+    }
+
+    public function testAHavingClauseIsAnsweredOnTheKeysShard(): void
+    {
+        $count = KeyedLetter::query()
+            ->where('user_id', 7)
+            ->groupBy('letter_id')
+            ->havingRaw('count(*) > 1')
+            ->count();
+
+        // only letter 100 has two rows
+        $this->assertSame(1, (int) $count);
+    }
+
+    public function testAGroupedAverageIsTheShardsOwn(): void
+    {
+        $expected = DB::connection($this->shardsOf(7)[0])->table('letters')
+            ->where('user_id', 7)
+            ->groupBy('letter_id')
+            ->avg('letter_id');
+
+        $this->assertEquals($expected, KeyedLetter::query()->where('user_id', 7)->groupBy('letter_id')->avg('letter_id'));
+    }
+
     public function testAnUnkeyedDistinctCountIsStillRefused(): void
     {
         $this->expectException(UnsupportedCrossShardQuery::class);

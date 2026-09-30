@@ -1408,6 +1408,15 @@ class ShardBuilder extends EloquentBuilder
             return parent::avg($column);
         }
 
+        /*
+        | One shard answers the average itself. Split into a sum and a count
+        | it would not, once grouped: they are two queries, and with no order
+        | nothing makes their first rows the same group.
+        */
+        if ($this->readsOneShard()) {
+            return $this->replicateForConnection((string) array_key_first($this->connections()))->avg($column);
+        }
+
         $this->refuseUncombinableAggregate('avg');
 
         $parts = $this->runOnConnections(function (string $name) use ($column): array {
