@@ -71,8 +71,16 @@ final class RoutingCache
             return null;
         }
 
+        $key = self::key($namespace, $entry);
+        $memo = self::memo();
+        $known = $memo?->get($key);
+
+        if ($known !== null) {
+            return $known;
+        }
+
         try {
-            $cached = self::store()->get(self::key($namespace, $entry));
+            $cached = self::store()->get($key);
         } catch (Throwable) {
             return null;
         }
@@ -81,10 +89,13 @@ final class RoutingCache
             return null;
         }
 
-        return [
+        $found = [
             'placement' => array_values($cached['placement']),
             'recorded' => (bool) ($cached['recorded'] ?? false),
         ];
+        $memo?->put($key, $found);
+
+        return $found;
     }
 
     /**
@@ -101,6 +112,8 @@ final class RoutingCache
         if (!self::enabled()) {
             return;
         }
+
+        self::memo()?->put(self::key($namespace, $entry), ['placement' => $placement, 'recorded' => $recorded]);
 
         try {
             self::store()->put(
@@ -125,6 +138,8 @@ final class RoutingCache
         if (!self::enabled()) {
             return;
         }
+
+        self::memo()?->forget(self::key($namespace, $entry));
 
         try {
             self::store()->forget(self::key($namespace, $entry));
@@ -166,6 +181,24 @@ final class RoutingCache
     /**
      * @return bool
      */
+    /**
+     * This request's lookups, when the package runs inside an application that has bound them.
+     *
+     * @return RoutingMemo|null
+     */
+    protected static function memo(): ?RoutingMemo
+    {
+        if (!function_exists('app')) {
+            return null;
+        }
+
+        try {
+            return app()->bound(RoutingMemo::class) ? app(RoutingMemo::class) : null;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
     protected static function enabled(): bool
     {
         return (bool) config('sharding.routing_cache.enabled', true);

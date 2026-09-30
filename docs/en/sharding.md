@@ -314,6 +314,14 @@ from is the one `strategyFor()` hands out, migrating connections already left
 out, so a reader and a writer of the same entry cannot disagree about where it
 is. A store that cannot be reached is not consulted.
 
+**A request asks the store once per slot.** A page of sixty queries against one
+tenant would otherwise ask the store the same question sixty times, each a round
+trip. The answers a request has already had are kept in `RoutingMemo`, bound as
+a scoped instance: Octane and the queue worker forget scoped instances between
+requests and between jobs, so a slot another process moves is seen by the next
+request, never halfway through one. A slot this process records, moves or
+forgets is changed in memory as it is in the store.
+
 **Recording a slot is skipped when the cache already says so.** The `created`
 hook records the slot after every insert, in a transaction with a locked read;
 when the cache holds exactly the placement about to be written there is nothing

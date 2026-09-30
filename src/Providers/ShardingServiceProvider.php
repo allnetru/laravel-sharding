@@ -8,6 +8,7 @@ use Allnetru\Sharding\Console\Commands\Shards\Migrate;
 use Allnetru\Sharding\Console\Commands\Shards\Rebalance;
 use Allnetru\Sharding\IdGenerator;
 use Allnetru\Sharding\ShardingManager;
+use Allnetru\Sharding\Support\RoutingMemo;
 use Illuminate\Support\ServiceProvider;
 
 /**
@@ -31,6 +32,9 @@ class ShardingServiceProvider extends ServiceProvider
         $this->app->singleton(IdGenerator::class, function () {
             return new IdGenerator(config('sharding'));
         });
+
+        // a request's routing lookups, forgotten between requests and between queued jobs
+        $this->app->scoped(RoutingMemo::class);
     }
 
     /**
