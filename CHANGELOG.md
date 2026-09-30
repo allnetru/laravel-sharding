@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.6.3 - 2026-09-30
+
+### Changed
+
+- **A request asks the routing cache for a slot once.** Every query of a sharded table asked the shared cache store where its slot lives — a round trip per query, and the same answer sixty times over on a page of sixty queries against one tenant. Profiled in an application under Octane, the lookups were about a fifth of a page's time. The answers a request has already had are now kept in `RoutingMemo`, a scoped instance: Octane and the queue worker forget it between requests and between jobs, so a slot moved by another process is seen by the next request, never halfway through one. A slot this process records, moves or forgets is changed in memory as it is in the store.
+
 ## v0.6.2 - 2026-09-29
 
 ### Fixed
@@ -33,6 +39,7 @@ app(ShardMover::class)->move(
     to: $newTenantId,
     filter: fn ($query) => $query->where('settlement_id', $settlement->getKey()),
 );
+
 
 
 
