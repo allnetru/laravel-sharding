@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.6.4 - 2026-09-30
+
+### Fixed
+
+- **A distinct, grouped or `having` aggregate on a keyed query is answered from its shard.** The refusal of aggregates that cannot be added up across shards looked at the query's shape only, so `where('user_id', 5)->distinct()->count('letter_id')` threw «cannot be combined across shards» even though the key named one shard and there was nothing to combine. The refusal now applies only when the query actually reads more than one shard — the same `readsOneShard()` the raw-aggregate refusal uses — so an unkeyed query is refused as before, and so is a keyed one during a rebalance, when `pin_by_key` is off and it fans out again. A keyed `avg()` is taken from its shard whole rather than as a sum and a count from two queries, which on a grouped query need not be the same group.
+
 ## v0.6.3 - 2026-09-30
 
 ### Changed
@@ -39,6 +45,7 @@ app(ShardMover::class)->move(
     to: $newTenantId,
     filter: fn ($query) => $query->where('settlement_id', $settlement->getKey()),
 );
+
 
 
 
