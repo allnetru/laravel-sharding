@@ -433,6 +433,50 @@ class ShardBuilder extends EloquentBuilder
 
     /**
      * @inheritdoc
+     *
+     * The query builder underneath, on the shard the query's own key names.
+     * It returned the model's default connection whatever the key said, so a
+     * keyed read through it — plain rows of expressions a model's casts would
+     * misread, and Eloquent's own `rawValue()`, `implode()`, `aggregate()`,
+     * which pass through it — came back from the wrong shard: empty, and
+     * silently. Only `get()` and the methods declared here knew the shard.
+     *
+     * A query that names no key, or a key spread over several shards, has no
+     * one connection to put it on and is left as it was: its SQL still
+     * compiles for `toSql()` and as a subquery, and reading it is the caller's
+     * fan-out to write. So is a keyed one while `pin_by_key` is off for a
+     * rebalance, when no read is pinned by its key.
+     */
+    public function toBase()
+    {
+        $base = parent::toBase();
+        $shard = $this->singleConnection ? null : $this->keyedShard();
+
+        if ($shard === null) {
+            return $base;
+        }
+
+        // the builder's own query when it has no scopes to apply: a copy, so the builder keeps its connection
+        $base = clone $base;
+        $base->connection = DB::connection($shard);
+
+        return $base;
+    }
+
+    /**
+     * The one shard the query's own key names: none when it names no key, or one spread over several shards.
+     *
+     * @return string|null
+     */
+    protected function keyedShard(): ?string
+    {
+        $pinned = $this->connectionsFromShardKey(app(ShardingManager::class)->connectionsFor($this->getModel()));
+
+        return $pinned === null || count($pinned) !== 1 ? null : (string) array_key_first($pinned);
+    }
+
+    /**
+     * @inheritdoc
      */
     public function get($columns = ['*'])
     {
@@ -799,7 +843,7 @@ class ShardBuilder extends EloquentBuilder
         /*
         | An aggregate over the whole result has one row and nothing to order
         | it by: Postgres refuses `order by id` on a query with no `group by`,
-        | and working around it with `toBase()` drops the routing entirely.
+        | and going round it through `toBase()` would leave this builder behind.
         |
         | Only when the query names one shard. Unpinned, each shard answers
         | its own aggregate and the bound would keep whichever came first —
@@ -1918,17 +1962,15 @@ class ShardBuilder extends EloquentBuilder
             return $this->getQuery()->getConnection();
         }
 
-        $pinned = $this->connectionsFromShardKey(
-            app(ShardingManager::class)->connectionsFor($this->getModel()),
-        );
+        $shard = $this->keyedShard();
 
-        if ($pinned === null || count($pinned) !== 1) {
+        if ($shard === null) {
             throw new UnsupportedCrossShardQuery(sprintf(
                 '%s() runs on one shard, and this query does not name one: give the shard key a single value with where(), or pick the connection with onShardConnection().',
                 $method,
             ));
         }
 
-        return DB::connection((string) array_key_first($pinned));
+        return DB::connection($shard);
     }
 }

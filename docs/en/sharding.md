@@ -733,8 +733,14 @@ Three more consequences worth knowing:
   `incrementEach`, `decrementEach` and `truncate`. What cannot be answered from parts — a grouped or distinct
   aggregate, a bounded write, a write to the shard key, `upsert`, a raw order,
   a join — throws `UnsupportedCrossShardQuery` rather than answering from one
-  shard. Anything reached through `toBase()` bypasses all of this by
-  definition.
+  shard. Anything reached through `toBase()` bypasses the merge by
+  definition, but not the shard: a query that names its key gets the base
+  builder on the shard that key names, so plain rows, `rawValue()`,
+  `implode()` and `aggregate()` read the rows the query meant. Until v0.6.5
+  it got the model's default connection, and on any other shard such a read
+  came back empty. A query that names no key has no one connection to go to
+  and still gets the default one — reading it there sees that shard alone,
+  so fan it out through the methods above instead.
 - **A correlated subquery is right on a colocated relation, and refused
   otherwise.** `whereHas`, `has`, `doesntHave`, `withCount` and `withSum`
   compile into a subquery that runs on the shard the outer row is on. When the
