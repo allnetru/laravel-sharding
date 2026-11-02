@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.6.5 - 2026-11-02
+
+### Fixed
+
+- **A keyed query's `toBase()` is on the shard its key names.** It returned the query builder on the model's default connection whatever the query's shard key said, so a keyed read through it ran on the wrong shard and came back empty, silently. That reached further than a caller's own `toBase()`: Eloquent answers `rawValue()`, `implode()`, `aggregate()` and its other passthroughs through it, so `where('tenant_id', $tenant)->rawValue('max(area)')` answered from the default shard too. With one shard it never showed. A query whose key names exactly one shard now gets its base builder there, by the same key reading `get()` and `transaction()` use. A query naming no key, a key over several shards, or a keyed one while `pin_by_key` is off for a rebalance is left on the default connection as before, so `toSql()`, `getBindings()` and correlated subqueries still compile.
+
 ## v0.6.4 - 2026-09-30
 
 ### Fixed
@@ -45,6 +51,7 @@ app(ShardMover::class)->move(
     to: $newTenantId,
     filter: fn ($query) => $query->where('settlement_id', $settlement->getKey()),
 );
+
 
 
 
