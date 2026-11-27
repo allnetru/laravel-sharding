@@ -9,8 +9,10 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Scope;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -110,6 +112,59 @@ class ShardGlobalScopeTest extends TestCase
         $this->assertSame([2, 4], Even::withTrashed()->orderBy('id')->get()->pluck('id')->all());
         $this->assertSame(2, Even::withTrashed()->count());
     }
+
+    /**
+     * A scope that leaves a heavy column out keeps doing so on a bounded read.
+     *
+     * The bounded read chose its own `*` before the scopes ran, so a scope
+     * that selects only when nothing was selected found the columns taken:
+     * `first()` and `take()` read the very column it existed to leave out —
+     * a 2 MB raster on every request, in the application that found it.
+     */
+    public function testANarrowingScopeKeepsItsSelectOnABoundedRead(): void
+    {
+        $first = Slim::orderBy('id')->first();
+
+        $this->assertSame(1, $first?->id);
+        $this->assertArrayNotHasKey('value', $first->getAttributes());
+
+        foreach (Slim::orderBy('id')->take(2)->get() as $note) {
+            $this->assertArrayNotHasKey('value', $note->getAttributes());
+        }
+
+        foreach (Slim::orderBy('id')->get() as $note) {
+            $this->assertArrayNotHasKey('value', $note->getAttributes());
+        }
+
+        // and a select the caller made is still the caller's
+        $this->assertSame(1, Slim::select(['id', 'value'])->orderBy('id')->first()?->value);
+    }
+
+    /**
+     * A per-shard query excludes replicas once, not twice.
+     *
+     * The copy for each shard excludes them itself and used to carry the
+     * global scope that does the same, so every query said it twice.
+     */
+    public function testAShardQueryExcludesReplicasOnce(): void
+    {
+        $selects = [];
+
+        Event::listen(QueryExecuted::class, function (QueryExecuted $query) use (&$selects): void {
+            if (str_starts_with($query->sql, 'select')) {
+                $selects[] = $query->sql;
+            }
+        });
+
+        Note::orderBy('id')->first();
+        Note::orderBy('id')->get();
+
+        $this->assertNotEmpty($selects);
+
+        foreach ($selects as $sql) {
+            $this->assertSame(1, substr_count($sql, 'is_replica'), $sql);
+        }
+    }
 }
 
 class Note extends Model
@@ -137,5 +192,19 @@ class EvenValuesOnly implements Scope
     public function apply(Builder $builder, Model $model): void
     {
         $builder->whereRaw('value % 2 = 0');
+    }
+}
+
+class Slim extends Note
+{
+    protected $table = 'notes';
+
+    protected static function booted(): void
+    {
+        static::addGlobalScope('slim', static function (Builder $builder): void {
+            if ($builder->getQuery()->columns === null) {
+                $builder->select(['notes.id', 'notes.is_replica', 'notes.deleted_at']);
+            }
+        });
     }
 }

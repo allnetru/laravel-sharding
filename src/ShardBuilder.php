@@ -36,6 +36,9 @@ use Throwable;
  */
 class ShardBuilder extends EloquentBuilder
 {
+    /** The global scope a shardable model keeps replica rows out of every read with. */
+    public const WITHOUT_REPLICAS_SCOPE = 'without_replicas';
+
     /**
      * Indicates whether the builder operates on a single shard connection.
      */
@@ -383,6 +386,25 @@ class ShardBuilder extends EloquentBuilder
     }
 
     /**
+     * A per-shard copy with its global scopes applied, and taken off it.
+     *
+     * Eloquent applies a query's global scopes first and falls back to the
+     * columns `get()` was given only when the scopes selected nothing. A
+     * bounded read chooses its columns itself, so it has to let the scopes
+     * speak before it does: otherwise the `*` it defaults to reaches the query
+     * first, and a scope that narrows the select — a heavy column left out —
+     * finds the columns taken and does nothing. Taken off once applied, or the
+     * cursor would apply them a second time.
+     *
+     * @param string $connection
+     * @return self
+     */
+    protected function scopedReplicaForConnection(string $connection): self
+    {
+        return $this->replicateForConnection($connection)->applyScopes()->withoutGlobalScopes();
+    }
+
+    /**
      * Carry the builder's global scopes over to a per-shard copy.
      *
      * Global scopes live on the builder and are applied lazily, so cloning the
@@ -400,6 +422,12 @@ class ShardBuilder extends EloquentBuilder
     protected function copyScopesTo(self $builder): void
     {
         foreach ($this->scopes as $identifier => $scope) {
+            // the copy excludes replicas itself, whatever the original removed: carried
+            // over as well, the scope put the same condition into every query twice
+            if ($identifier === self::WITHOUT_REPLICAS_SCOPE) {
+                continue;
+            }
+
             $builder->withGlobalScope($identifier, $scope);
         }
 
@@ -1126,7 +1154,7 @@ class ShardBuilder extends EloquentBuilder
         $bound = $this->shardBound($limit, $offset);
 
         foreach ($this->connections() as $name => $config) {
-            $builder = $this->replicateForConnection($name);
+            $builder = $this->scopedReplicaForConnection($name);
             $this->applySelect($builder, $columns);
             $this->applyShardBound($builder, $bound);
             $iterators[$name] = $builder->cursor()->getIterator();
