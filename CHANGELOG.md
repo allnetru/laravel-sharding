@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.6.7 - 2026-11-27
+
+### Fixed
+
+- **A global scope's own limit outlasts the bound a bounded read puts on each shard.** Since v0.6.6 the scopes of a per-shard copy run before its columns are chosen, and a scope that calls `limit()` — a default cap, say — had its limit overwritten by the caller's bound: `take(1000)` with a scope capping reads at 100 read a thousand rows from each shard. Before v0.6.6 the scope ran last and its limit won, as it does in Eloquent. The scope's limit is now read off the scoped copy and put back after the bound, on the bounded read alone; `paginate()` is untouched, so a caller's earlier `limit()` still gives way to the page there.
+
 ## v0.6.6 - 2026-11-27
 
 ### Fixed
@@ -58,6 +64,7 @@ app(ShardMover::class)->move(
     to: $newTenantId,
     filter: fn ($query) => $query->where('settlement_id', $settlement->getKey()),
 );
+
 
 
 
