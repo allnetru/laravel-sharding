@@ -882,7 +882,11 @@ class ShardBuilder extends EloquentBuilder
             $builder->orderBy($this->getModel()->getKeyName());
         }
 
-        $builder->limit($bound);
+        // a limit a global scope set is the scope's: the caller's was taken off
+        // before the copy was made, and Eloquent lets the scopes have the last word
+        if ($builder->getQuery()->limit === null) {
+            $builder->limit($bound);
+        }
     }
 
     /**
