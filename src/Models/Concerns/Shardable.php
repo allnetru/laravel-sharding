@@ -319,7 +319,7 @@ trait Shardable
      */
     public static function bootShardable(): void
     {
-        static::addGlobalScope('without_replicas', function (Builder $builder): void {
+        static::addGlobalScope(ShardBuilder::WITHOUT_REPLICAS_SCOPE, function (Builder $builder): void {
             /** @var Builder<static>&ShardBuilder $builder */
             $builder->withoutReplicas();
         });
