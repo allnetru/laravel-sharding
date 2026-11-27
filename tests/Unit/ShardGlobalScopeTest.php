@@ -155,6 +155,9 @@ class ShardGlobalScopeTest extends TestCase
         // two live rows on each shard, and the scope lets one through from each
         $this->assertSame([1, 2], Capped::orderBy('id')->take(10)->get()->pluck('id')->all());
         $this->assertSame(1, Capped::orderBy('id')->first()?->id);
+
+        // and a caller's own limit before paginate() gives way to the page, as in Eloquent
+        $this->assertSame([1, 2, 5, 6], Note::limit(1)->orderBy('id')->paginate(10)->pluck('id')->all());
     }
 
     /**
