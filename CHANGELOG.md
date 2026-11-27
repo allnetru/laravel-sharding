@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.6.6 - 2026-11-27
+
+### Fixed
+
+- **A global scope that narrows the select keeps doing so on a bounded read.** `first()`, `take()` and every read with a limit build a copy of the query per shard and chose its columns there — the `*` that `get()` defaults to — before the model's global scopes had run. Eloquent applies the scopes first and falls back to those columns only when the scopes selected nothing, so a scope that selects only when nothing is selected found the columns taken and did nothing. A scope leaving a heavy column out read it on every bounded read: in the application that found it, a 2 MB raster a request, 13.8 ms and 4.7 MB a call against 5.1 ms and 350 KB after. The per-shard copy now has its scopes applied, and taken off, before the columns are chosen; a select the caller made stays the caller's.
+- **A per-shard query excludes replicas once.** The copy for each shard excludes replicas itself and also carried the model's `without_replicas` global scope, so every query said `is_replica = false` twice. The scope is no longer carried over; the copy's own exclusion stands whatever the original removed, as before. The scope's name is `ShardBuilder::WITHOUT_REPLICAS_SCOPE`.
+
 ## v0.6.5 - 2026-11-02
 
 ### Fixed
@@ -51,6 +58,7 @@ app(ShardMover::class)->move(
     to: $newTenantId,
     filter: fn ($query) => $query->where('settlement_id', $settlement->getKey()),
 );
+
 
 
 
