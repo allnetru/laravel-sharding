@@ -1155,8 +1155,15 @@ class ShardBuilder extends EloquentBuilder
 
         foreach ($this->connections() as $name => $config) {
             $builder = $this->scopedReplicaForConnection($name);
+            // a limit on the copy is a scope's: the caller's was taken off before the copy was made
+            $scoped = $builder->getQuery()->limit;
             $this->applySelect($builder, $columns);
             $this->applyShardBound($builder, $bound);
+
+            // and the scope has the last word, as it does in Eloquent, where scopes are applied last
+            if ($scoped !== null) {
+                $builder->limit($scoped);
+            }
             $iterators[$name] = $builder->cursor()->getIterator();
         }
 

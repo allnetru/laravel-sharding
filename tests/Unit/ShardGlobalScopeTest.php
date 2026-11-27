@@ -141,6 +141,26 @@ class ShardGlobalScopeTest extends TestCase
     }
 
     /**
+     * A scope's own limit outlasts the bound a bounded read puts on each shard.
+     *
+     * Applied before the bound since the scopes run first, the scope's limit
+     * was overwritten by the caller's: `take(10)` with a scope capping reads at
+     * one row read ten from each shard.
+     */
+    public function testAScopesLimitOutlastsTheShardBound(): void
+    {
+        DB::connection('shard_1')->table('notes')->insert(['id' => 5, 'value' => 5, 'is_replica' => false]);
+        DB::connection('shard_2')->table('notes')->insert(['id' => 6, 'value' => 6, 'is_replica' => false]);
+
+        // two live rows on each shard, and the scope lets one through from each
+        $this->assertSame([1, 2], Capped::orderBy('id')->take(10)->get()->pluck('id')->all());
+        $this->assertSame(1, Capped::orderBy('id')->first()?->id);
+
+        // and a caller's own limit before paginate() gives way to the page, as in Eloquent
+        $this->assertSame([1, 2, 5, 6], Note::limit(1)->orderBy('id')->paginate(10)->pluck('id')->all());
+    }
+
+    /**
      * A per-shard query excludes replicas once, not twice.
      *
      * The copy for each shard excludes them itself and used to carry the
@@ -205,6 +225,18 @@ class Slim extends Note
             if ($builder->getQuery()->columns === null) {
                 $builder->select(['notes.id', 'notes.is_replica', 'notes.deleted_at']);
             }
+        });
+    }
+}
+
+class Capped extends Note
+{
+    protected $table = 'notes';
+
+    protected static function booted(): void
+    {
+        static::addGlobalScope('capped', static function (Builder $builder): void {
+            $builder->limit(1);
         });
     }
 }
